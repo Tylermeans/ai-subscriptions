@@ -11,7 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "scripts"))
-from ai_sub import Store, UserError
+from ai_sub import Store, UserError, SAMPLE_SECONDS
 
 LABEL = "local.ai-subscriptions.monitor"
 
@@ -54,7 +54,7 @@ def background(store, uninstall=False):
     target.parent.mkdir(parents=True, exist_ok=True)
     data = {"Label": LABEL, "ProgramArguments": [sys.executable, str(ROOT / "scripts/sample.py")],
             "EnvironmentVariables": {"AI_SUB_HOME": str(store.home.resolve()), "PATH": os.environ["PATH"]},
-            "StartInterval": 900, "RunAtLoad": True, "ProcessType": "Background",
+            "StartInterval": SAMPLE_SECONDS, "RunAtLoad": True, "ProcessType": "Background",
             "StandardOutPath": str(store.home / "monitor.log"),
             "StandardErrorPath": str(store.home / "monitor.log")}
     target.write_bytes(plistlib.dumps(data))
@@ -62,7 +62,7 @@ def background(store, uninstall=False):
     result = subprocess.run(["launchctl", "bootstrap", domain, str(target)], capture_output=True)
     if result.returncode:
         raise UserError("LaunchAgent file is ready but bootstrap failed. Run the installer in your logged-in Mac terminal.")
-    print("Background sampling enabled every 15 minutes.")
+    print("Background sampling enabled every 4 minutes; observations expire after 5 minutes.")
 
 
 def vscode_extension(uninstall=False):

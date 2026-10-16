@@ -8,7 +8,7 @@ const {formatStatus, renderTemplate} = require('../status');
 
 const fixture = {generated_at: 123, profiles: [
   {profile: 'codex/work', provider: 'codex', name: 'work', email: 'work@example.com', freshness: 'fresh',
-   capacity: 'Both windows required', sample: {windows: [{minutes: 10080, used: 4}]}},
+   capacity: 'Both windows required', sample: {observed: Date.now() / 1000, windows: [{minutes: 10080, used: 4, reset: Date.now() / 1000 + 3600}]}},
   {profile: 'claude/personal', provider: 'claude', name: 'personal', freshness: 'unknown', capacity: 'Usage needed', sample: null}
 ]};
 
@@ -26,6 +26,16 @@ test('old observations and provider blocks stay visible', () => {
   assert.match(formatStatus(data).text, /~7d 4%/);
   data.profiles[0].sample.blocked = true;
   assert.match(formatStatus(data).text, /!7d 4%/);
+});
+
+test('cached usage expires after five minutes even with a newly generated display', () => {
+  const data = structuredClone(fixture);
+  const observed = data.profiles[0].sample.observed;
+  data.generated_at = observed + 301;
+  assert.doesNotMatch(formatStatus(data, observed + 300).text, /~7d/);
+  assert.match(formatStatus(data, observed + 300.001).text, /~7d 4%/);
+  assert.match(formatStatus(data, observed + 301).tooltip, /stale/);
+  assert.match(formatStatus(data, observed + 301).tooltip, /Usage observed/);
 });
 
 test('webview data cannot escape its JSON script element', () => {

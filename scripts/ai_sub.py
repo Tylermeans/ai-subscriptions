@@ -24,7 +24,8 @@ from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
 PROVIDERS = ("codex", "claude")
-FRESH_SECONDS = 900
+FRESH_SECONDS = 300
+SAMPLE_SECONDS = 240
 AUTH_ENV = ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
             "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
             "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR")
@@ -604,7 +605,7 @@ def parser():
         if action == "status":
             s.add_argument("--json", action="store_true")
         if action == "watch":
-            s.add_argument("--interval", type=int, default=300)
+            s.add_argument("--interval", type=int, default=SAMPLE_SECONDS)
             s.add_argument("--once", action="store_true")
         if action == "history":
             s.add_argument("--days", type=int, default=7)

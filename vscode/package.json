@@ -2,7 +2,7 @@
   "name": "ai-subscriptions",
   "displayName": "AI Subscription Usage",
   "description": "Codex and Claude subscription usage in the right side of the status bar, with an account usage chart.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "tylermeans",
   "license": "UNLICENSED",
   "engines": {"vscode": "^1.95.0"},

@@ -45,10 +45,22 @@ class DashboardTests(unittest.TestCase):
 
     def test_stale_and_backend_block_are_reported(self):
         self.store.save(self.codex, [app.window("week", 4, time.time() + 10000, 10080)], "fixture",
-                        observed=time.time() - 901, blocked=True)
+                        observed=time.time() - 301, blocked=True)
         profile = dashboard.snapshot(self.store)["profiles"][0]
         self.assertEqual(profile["freshness"], "stale")
         self.assertIn("block", profile["capacity"])
+
+    def test_refreshing_display_does_not_make_old_usage_fresh(self):
+        observed = time.time() - 301
+        self.store.save(self.claude, [app.window("week", 95, time.time() + 10000, 10080)],
+                        "claude-statusline", observed=observed)
+        data = dashboard.snapshot(self.store)
+        profile = data["profiles"][1]
+        self.assertGreater(data["generated_at"], observed + 300)
+        self.assertEqual(profile["freshness"], "stale")
+        self.assertEqual(profile["sample"]["observed"], observed)
+        self.assertEqual(profile["sample"]["windows"][0]["used"], 95)
+        self.assertIn("Fresh usage needed", profile["capacity"])
 
     def test_snapshot_html_escapes_embedded_data_and_has_no_remote_resources(self):
         data = dashboard.snapshot(self.store)

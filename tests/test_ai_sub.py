@@ -131,7 +131,9 @@ class SubscriptionTests(unittest.TestCase):
         now = time.time()
         sample = {"observed": now, "windows": self.windows(), "error": None}
         self.assertEqual(app.freshness(sample, now), "fresh")
-        sample["observed"] -= 901
+        sample["observed"] = now - 300
+        self.assertEqual(app.freshness(sample, now), "fresh")
+        sample["observed"] = now - 300.001
         self.assertEqual(app.freshness(sample, now), "stale")
         sample["observed"] = now
         sample["windows"][0]["reset"] = now - 1
@@ -144,7 +146,7 @@ class SubscriptionTests(unittest.TestCase):
         incomplete = self.profile(name="incomplete")
         self.store.save(good, self.windows(40, 60), "test")
         self.store.save(blocked, self.windows(1, 1), "test", blocked=True)
-        self.store.save(stale, self.windows(1, 1), "test", observed=time.time() - 1000)
+        self.store.save(stale, self.windows(1, 1), "test", observed=time.time() - 301)
         self.store.save(incomplete, self.windows(1, 1)[:1], "test")
         before = self.store.config()
         remaining, key, _ = app.recommend(self.store, [blocked, stale, incomplete, good])
@@ -290,6 +292,23 @@ class InstallerTests(unittest.TestCase):
                     installer.main()
                 self.assertTrue(state.exists())
                 self.assertTrue(all(not target.is_symlink() for target, _ in installer.links()))
+
+    def test_installed_sampler_runs_before_usage_expires(self):
+        import plistlib
+        spec = importlib.util.spec_from_file_location("ai_sub_installer", app.ROOT / "install.py")
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(Path, "home", return_value=Path(temporary)), \
+             patch.object(installer.subprocess, "run", return_value=app.subprocess.CompletedProcess([], 0)) as run, \
+             contextlib.redirect_stdout(io.StringIO()):
+            installer.background(app.Store(Path(temporary) / "state"))
+            path = Path.home() / "Library/LaunchAgents" / (installer.LABEL + ".plist")
+            config = plistlib.loads(path.read_bytes())
+            self.assertEqual(config["StartInterval"], 240)
+            self.assertLess(config["StartInterval"], app.FRESH_SECONDS)
+            self.assertTrue(config["RunAtLoad"])
+            self.assertEqual(run.call_args.args[0][1], "bootstrap")
 
     def test_repeated_install_and_conflict_preserve_existing_files(self):
         location = Path(__file__).resolve().parents[1] / "install.py"

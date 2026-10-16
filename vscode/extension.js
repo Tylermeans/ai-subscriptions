@@ -13,7 +13,7 @@ function activate(context) {
   item.command = 'aiSubscriptions.showUsage';
   item.text = '$(pulse) AI usage: loading';
   item.show();
-  let panel, timer, reading, fetching, disposed = false;
+  let panel, timer, ageTimer, reading, fetching, disposed = false;
   let latest = {version: 1, generated_at: Date.now() / 1000, profiles: []};
   let lastError = null;
   const children = new Set();
@@ -91,8 +91,15 @@ function activate(context) {
   }
   function schedule() {
     clearInterval(timer);
+    clearInterval(ageTimer);
     const seconds = Math.max(5, Math.min(300, Number(setting('refreshSeconds', 15)) || 15));
     timer = setInterval(() => void refresh(), seconds * 1000);
+    // Expire cached readings even when display polling is slow or temporarily stalled.
+    ageTimer = setInterval(() => {
+      if (disposed || lastError) return;
+      const status = formatStatus(latest);
+      item.text = status.text; item.tooltip = status.tooltip;
+    }, 1000);
     void refresh();
   }
   context.subscriptions.push(item,
@@ -100,7 +107,7 @@ function activate(context) {
     vscode.commands.registerCommand('aiSubscriptions.refresh', refresh),
     vscode.commands.registerCommand('aiSubscriptions.fetchCodex', fetchCodex),
     vscode.workspace.onDidChangeConfiguration(event => { if (event.affectsConfiguration('aiSubscriptions')) schedule(); }),
-    {dispose() { disposed = true; clearInterval(timer); for (const child of children) child.kill(); panel?.dispose(); }});
+    {dispose() { disposed = true; clearInterval(timer); clearInterval(ageTimer); for (const child of children) child.kill(); panel?.dispose(); }});
   schedule();
 }
 

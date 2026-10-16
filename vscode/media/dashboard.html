@@ -80,7 +80,7 @@ footer { display:flex; justify-content:space-between; gap:20px; color:var(--mute
   </div>
   <div id="error" class="notice" role="status" hidden></div>
   <div id="accounts"></div>
-  <div class="notice"><strong>Claude usage appears after a response in a session started with <code>ai-sub run claude</code>, when the CLI supplies it.</strong> Idle account data becomes stale after 15 minutes. Missing windows are shown as “Not reported,” never 0%. Automatic standby selection currently requires both short-window and weekly data.</div>
+  <div class="notice"><strong>Usage readings expire after 5 minutes.</strong> Older values are marked stale and excluded from automatic switching. Claude needs a new quota report from an active <code>ai-sub run claude</code> session; refreshing this display does not fetch idle Claude usage. Missing windows are shown as “Not reported,” never 0%. Automatic standby selection currently requires both short-window and weekly data.</div>
   <footer><span id="updated"></span><span id="mode-label">Local observations only · no model requests</span></footer>
 </main>
 <script nonce="__AI_SUB_NONCE__" type="application/json" id="initial-data">__AI_SUB_DATA__</script>
@@ -89,6 +89,7 @@ footer { display:flex; justify-content:space-between; gap:20px; color:var(--mute
   'use strict';
   const mode = '__AI_SUB_MODE__';
   const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
+  let latest, expiryTimer;
   const $ = id => document.getElementById(id);
   const node = (tag, className, text) => {
     const element = document.createElement(tag);
@@ -149,11 +150,14 @@ footer { display:flex; justify-content:space-between; gap:20px; color:var(--mute
     return card;
   }
   function render(data) {
+    latest = data;
+    clearTimeout(expiryTimer);
+    const now = Date.now() / 1000;
     const accounts = (Array.isArray(data.profiles) ? data.profiles : []).map(account => {
       if (account.sample && account.freshness === 'fresh') {
-        const now = Date.now() / 1000;
-        if (now - account.sample.observed > 900 || account.sample.observed > now + 60) return {...account, freshness:'stale'};
-        if (account.sample.windows.some(w => !w.reset || w.reset <= now)) return {...account, freshness:'refresh needed'};
+        const capacity = 'Fresh usage needed for automatic selection';
+        if (!Number.isFinite(account.sample.observed) || now - account.sample.observed > 300 || account.sample.observed > now + 60) return {...account, freshness:'stale', capacity};
+        if (account.sample.windows.some(w => !w.reset || w.reset <= now)) return {...account, freshness:'refresh needed', capacity};
       }
       return account;
     });
@@ -164,17 +168,19 @@ footer { display:flex; justify-content:space-between; gap:20px; color:var(--mute
     $('accounts').replaceChildren(...accounts.map(accountView));
     if (!accounts.length) $('accounts').append(node('div', 'empty', 'No accounts registered. Install the terminal tool, then run ai-sub list or ai-sub add PROVIDER NAME --email ADDRESS.'));
     $('updated').textContent = `Display read ${date(data.generated_at)}`;
-    $('error').hidden = true;
     const age = Date.now() / 1000 - data.generated_at;
     $('mode-label').textContent = vscode ? 'Updates every 15 seconds by default · local observations only'
       : mode === 'live-file' && age < 45 ? 'Updates every 15 seconds while ai-sub dashboard is running' : 'Saved snapshot · run ai-sub dashboard for live display updates';
+    const deadlines = accounts.filter(a => a.freshness === 'fresh' && a.sample).flatMap(a =>
+      [a.sample.observed + 300, ...a.sample.windows.map(w => w.reset)]);
+    if (deadlines.length) expiryTimer = setTimeout(() => render(latest), Math.max(1, (Math.min(...deadlines) - now) * 1000 + 1));
   }
   $('refresh').addEventListener('click', () => vscode ? vscode.postMessage({type:'refresh'}) : location.reload());
   $('fetch').hidden = !vscode;
   $('fetch').addEventListener('click', () => { $('fetch').disabled = true; vscode.postMessage({type:'fetchCodex'}); });
   window.addEventListener('message', event => {
     if (!vscode || !event.data) return;
-    if (event.data.type === 'snapshot') { render(event.data.data); }
+    if (event.data.type === 'snapshot') { $('error').hidden = true; render(event.data.data); }
     if (event.data.type === 'error') { $('error').textContent = event.data.message; $('error').hidden = false; }
     if (event.data.type === 'fetchDone') $('fetch').disabled = false;
   });

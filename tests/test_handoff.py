@@ -79,7 +79,7 @@ class HandoffTests(unittest.TestCase):
         self.assertFalse(h.eligible(self.store, self.one, {**self.two, "verified_email": self.one["email"].upper()}, 90))
 
     def test_stale_missing_weekly_expired_blocked_and_unverified_not_candidates(self):
-        self.save(self.two, 10, observed=time.time() - 901)
+        self.save(self.two, 10, observed=time.time() - 301)
         self.assertFalse(h.eligible(self.store, self.one, self.two, 90))
         self.save(self.two, 10, blocked=True)
         self.assertFalse(h.eligible(self.store, self.one, self.two, 90))
@@ -100,7 +100,7 @@ class HandoffTests(unittest.TestCase):
     def test_provider_block_triggers_even_at_low_percent_but_not_stale(self):
         self.save(self.one, 5, blocked=True)
         self.assertTrue(h.needs_switch(self.store.latest(self.one), 90))
-        self.save(self.one, 5, blocked=True, observed=time.time() - 901)
+        self.save(self.one, 5, blocked=True, observed=time.time() - 301)
         self.assertFalse(h.needs_switch(self.store.latest(self.one), 90))
 
     def test_missing_checkpoint_gets_one_request_without_looping(self):

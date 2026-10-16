@@ -56,8 +56,20 @@ const {renderTemplate} = require('../status');
     await page.setViewportSize({width: 390, height: 844});
     await page.screenshot({path: path.join(output, 'usage-mobile.png'), fullPage: true});
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+    // A freshly redrawn snapshot must expire based on measurement time, even
+    // when no further messages arrive from the extension or collector.
+    data.generated_at = Date.now() / 1000;
+    data.profiles[0].sample.observed = Date.now() / 1000 - 298;
+    await page.evaluate(data => window.postMessage({type: 'snapshot', data}, '*'), data);
+    await page.waitForFunction(() => document.querySelector('.card .badge').textContent === 'fresh');
+    await page.evaluate(() => window.postMessage({type: 'error', message: 'Collector offline'}, '*'));
+    await page.waitForFunction(() => document.querySelector('.card .badge').textContent === 'stale');
+    assert.match(await page.locator('.card').first().textContent(), /8%last seen/);
+    assert.match(await page.locator('.card').first().textContent(), /Fresh usage needed/);
+    assert.equal(await page.locator('#error').isVisible(), true);
+    assert.equal(await page.locator('#error').textContent(), 'Collector offline');
     assert.deepEqual(errors, []);
     assert.deepEqual(remoteRequests, []);
-    console.log('Browser checks passed: chart rendering, empty and stale data, refresh messages, injection escaping, narrow layout, no remote requests.');
+    console.log('Browser checks passed: chart rendering, five-minute expiry without new data, error preservation, refresh messages, injection escaping, narrow layout, no remote requests.');
   } finally { await browser.close(); fs.rmSync(temp, {recursive: true, force: true}); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

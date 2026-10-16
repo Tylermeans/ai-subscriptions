@@ -40,7 +40,7 @@ session databases, in-memory model state, or transcripts between accounts.
    to edit the same files just to collect quota; a standby can work elsewhere.
 
 Fresh capacity requires both short-window and weekly data, valid future reset
-times, a snapshot no older than 15 minutes, no provider block, and all reported
+times, a snapshot no older than 5 minutes, no provider block, and all reported
 windows below the configured threshold. The standby's verified email must differ
 from the outgoing account's. Missing or stale measurements prevent a handoff;
 the tool does not guess a standby account has reset.

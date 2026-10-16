@@ -46,7 +46,7 @@ same regular terminal and complete the official browser login. If no existing
 profile was registered, follow [Add another account](#add-another-account).
 
 `--background` installs a macOS user LaunchAgent that samples Codex usage every
-15 minutes. Omit it if you prefer manual collection. Claude usage is collected
+4 minutes. Omit it if you prefer manual collection. Claude usage is collected
 from sessions launched through `ai-sub run`; the background sampler does not
 query idle Claude accounts. **Installing the sampler does not enable switching.**
 
@@ -92,13 +92,22 @@ claim about which account an unrelated native extension is using.
 The chart shows every account's reported short-window and weekly usage, reset
 times, observation time and automatic-handoff setting. Missing windows say
 **Not reported**. A weekly-only report displays its weekly percentage without
-inventing a five-hour figure. Stale measurements remain visibly marked.
+inventing a five-hour figure. Readings older than **5 minutes** remain visible as
+**stale / last seen** and cannot trigger or qualify for automatic switching.
+The chart and indicator expire readings even when no new data arrives. Refreshing
+the display never changes a measurement's observation time.
 
 The display rereads local observations every **15 seconds**. This does not
 fetch fresh provider limits. Use **AI Subscriptions: Fetch Codex Usage** in the
 chart or Command Palette for a live Codex check. For Claude, start a session
 with `ai-sub run claude ACCOUNT`; quota appears after a response when its CLI
-supplies that data. Idle Claude data becomes stale after 15 minutes.
+supplies that data. Idle Claude data becomes stale after 5 minutes.
+
+To keep Codex readings current, enable the four-minute background sampler with
+`python3 install.py --background`. Rerun this after updating an older installation
+that used a 15-minute schedule. Provider/network failures and computer sleep can
+delay collection; the five-minute freshness limit still applies. Claude requires
+new active-session quota reports and cannot be kept fresh by the sampler alone.
 
 If VS Code cannot locate the command, set `aiSubscriptions.executablePath` in
 **User settings** to the absolute path of your installed `ai-sub`. Set
@@ -107,8 +116,8 @@ extension reads local account state even in a remote VS Code window; it does
 not monitor another machine's accounts automatically.
 
 For manual installation, `python3 scripts/build_vscode.py` creates
-`dist/ai-subscriptions-0.2.0.vsix`. Install it using **Extensions: Install from
-VSIX…** or `code --install-extension dist/ai-subscriptions-0.2.0.vsix --force`.
+`dist/ai-subscriptions-0.2.1.vsix`. Install it using **Extensions: Install from
+VSIX…** or `code --install-extension dist/ai-subscriptions-0.2.1.vsix --force`.
 The package is built from an explicit source-file allowlist and contains no
 account data. It is installed locally, not published to the VS Code Marketplace.
 
@@ -124,7 +133,7 @@ hosted dashboard is required. For an initial live Codex check, use
 `ai-sub dashboard --refresh`. For a snapshot that exits immediately, use
 `ai-sub dashboard --once`.
 
-For terminal-only monitoring, use `ai-sub watch --interval 300`.
+For terminal-only monitoring, use `ai-sub watch --interval 240`.
 
 ## Use it from an existing Claude session
 
@@ -280,7 +289,7 @@ Run these in another terminal while your agent works:
 | `ai-sub status` | Latest saved account measurements and freshness |
 | `ai-sub status --refresh` | Fetch Codex limits, then show all saved measurements |
 | `ai-sub status claude` | Saved Claude usage, including unknown/stale data |
-| `ai-sub watch --interval 300` | Repeated terminal reports and Codex refreshes |
+| `ai-sub watch --interval 240` | Repeated terminal reports and Codex refreshes |
 | `ai-sub sessions` | Managed runs, handoff status and saved checkpoint paths |
 | `ai-sub auto status` | Whether switching is enabled and its threshold |
 | `ai-sub history --days 7` | Recorded usage observations over seven days |

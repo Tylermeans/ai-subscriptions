@@ -47,14 +47,14 @@ chat replies, usage database, or shell arguments.
 - Claude limits arrive through the official status-line payload when launched
   with `ai-sub run claude NAME`, after a model response. `--refresh` does not make
   a paid model request or pretend to refresh an idle Claude account.
-- `ai-sub watch --interval 300` monitors in a terminal. The global installer can
-  also set up a 15-minute macOS background sampler; see the installation README.
+- `ai-sub watch --interval 240` monitors in a terminal. The global installer can
+  also set up a 4-minute macOS background sampler; see the installation README.
 - `ai-sub history --days 7` shows recorded observations, with up to 90 days retained.
 - `ai-sub recommend PROVIDER --refresh` ranks accounts with complete, fresh
   short-window and weekly limits. It never changes the selected account.
 
 Use the provider's reset timestamp, not a calendar-week assumption. Unknown,
-expired, or older-than-15-minute data is not evidence of available quota. Preserve
+expired, or older-than-5-minute data is not evidence of available quota. Preserve
 server-reported blocks even when a displayed percentage is low. Percentages from
 different snapshots or subscriptions cannot be summed into weekly usage. Data
 starts when monitoring is enabled; there is no fabricated historical backfill.
