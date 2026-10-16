@@ -201,6 +201,16 @@ class SubscriptionTests(unittest.TestCase):
         self.assertEqual(execute.call_args.args[1][-1], "--chrome")
         self.assertEqual(execute.call_args.args[2]["AI_SUB_PROFILE"], "claude/personal")
 
+    def test_default_launch_prompt_after_separator_is_not_an_account_name(self):
+        self.profile("claude")
+        prompt = "Continue the current task; do not deploy."
+        with patch.dict(os.environ, {"AI_SUB_HOME": str(self.store.home)}), \
+             patch.object(app, "identity"), patch.object(app, "binary", return_value="/bin/claude"), \
+             patch.object(app.os, "execvpe") as execute, contextlib.redirect_stderr(io.StringIO()):
+            app.main(["run", "claude", "--", prompt])
+        self.assertEqual(execute.call_args.args[1][-1], prompt)
+        self.assertEqual(execute.call_args.args[2]["AI_SUB_PROFILE"], "claude/personal")
+
     def test_rpc_handshake_filters_notifications_and_never_sends_model_requests(self):
         profile = self.profile()
         fixture = Path(self.temporary.name) / "fake-codex"

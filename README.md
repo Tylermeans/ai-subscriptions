@@ -13,6 +13,7 @@ that person's computer; this repository contains the reusable tool.
 
 **Start here:** [Install](#install) · [Show the usage chart](#show-the-usage-chart)
 · [Use it from Claude](#use-it-from-an-existing-claude-session)
+· [Use plain claude or codex](#use-plain-claude-or-codex)
 · [Add accounts](#add-another-account) · [Automatic handoffs](#automatic-handoffs)
 · [Codex → Claude](#codex--claude-fallback)
 · [Troubleshooting](#troubleshooting)
@@ -195,6 +196,45 @@ In Codex, `$ai-subscriptions` invokes the shared skill. As with Claude, automati
 handoffs require launching through `ai-sub run`; invoking the skill alone does
 not supervise a running session.
 
+## Use plain claude or codex
+
+Account names are optional: `ai-sub run claude` uses your selected Claude
+profile. `ai-sub run claude work` chooses `work` for that launch. Neither command
+logs you out of another profile. Each profile keeps its own official CLI login.
+
+To make the familiar terminal commands start through ai-sub, source this file
+in your **regular zsh or bash shell**:
+
+```sh
+source /absolute/path/to/ai-subscriptions/native.zsh
+ai-sub use claude work          # choose a saved account; does not log in/out
+ai-sub auto on claude           # enable automatic handoffs
+claude                         # same as ai-sub run claude
+claude --permission-mode auto  # preserve Claude's native Auto mode
+codex                          # same as ai-sub run codex
+```
+
+Replace `work` with a label from `ai-sub list`. To enable this in new terminals,
+add the `source .../native.zsh` line to `~/.zshrc` (or `~/.bashrc`). Source it in
+each already-open terminal where you want these commands managed. The script
+also sets up PATH, so it replaces the need to source `activate.zsh` separately.
+It refuses to overwrite existing `claude`/`codex` aliases or functions.
+
+These are shell functions invoking the installed official CLIs. They do not
+replace binaries or hot-swap credentials inside a running CLI. Automatic moves
+still require fresh standby quota and a safe checkpoint; a replacement CLI
+continues in the same worktree with task notes, not full native chat history.
+Native resume/fork and other unsupported managed options produce a visible
+error rather than silently disabling supervision.
+
+Headless calls (`claude -p`, `codex exec`, redirected input/output) and native
+administration commands pass through with their existing environment. Foreman
+workers and native editor extensions are not intercepted. Those calls use
+their own native account configuration, not the ai-sub selected profile.
+`command claude` or `command codex` explicitly bypasses these shell functions.
+To disable them in the current shell, run `unset -f claude codex` followed by
+`unset _AI_SUB_NATIVE_ENABLED`; remove the source line to disable future shells.
+
 ## Add another account
 
 Replace the example address with the email for the subscription you own or are
@@ -230,8 +270,9 @@ ai-sub use claude work
 ai-sub run claude
 ```
 
-`use` changes the launcher's default, not the bare `claude` or `codex` command,
-and does not move a running session. New profiles have independent CLI settings
+`use` changes the launcher's default, including interactive commands launched
+through `native.zsh`; it does not move a running session or change the native
+binary's default credentials. New profiles have independent CLI settings
 and history. Existing plugins, MCP servers and conversations are not copied;
 configure each profile for the tools its work needs.
 
@@ -409,6 +450,8 @@ may contain confidential project context; do not put secrets in them.
 | Symptom | What to do |
 | --- | --- |
 | `ai-sub: command not found` | Run `source /absolute/path/to/ai-subscriptions/activate.zsh` in that terminal. |
+| `ai-sub run claude` selects the wrong account | Run `ai-sub list`, then `ai-sub use claude NAME` to choose the default. A known exhausted default can be skipped at startup only when another verified profile has complete quota less than five minutes old. |
+| Plain `claude` does not use ai-sub | Source `native.zsh` in that shell and check `type claude` reports a function. Existing sessions cannot be adopted. |
 | `/ai-subscriptions` is missing in Claude | Run the installer, then restart Claude so it discovers the skill. |
 | No bottom-right indicator | Run `python3 install.py --vscode`, reload VS Code, and ensure its status bar is visible. Check that AI Subscription Usage is enabled. |
 | Indicator says usage unavailable | Set the absolute `aiSubscriptions.executablePath` in VS Code User settings; check Python and run `ai-sub doctor` in a regular terminal. |

@@ -24,6 +24,12 @@ beside this file unless `AI_SUB_HOME` overrides it.
    `ai-sub run PROVIDER` session then uses that profile. A specific launch can use
    `ai-sub run PROVIDER NAME -- CLI_ARGUMENTS`.
 
+For ordinary interactive `claude` / `codex` commands, the user can source the
+checkout's `native.zsh` in their regular zsh/bash terminal. It routes those starts
+through `ai-sub run` with the selected profile; see [shell setup](README.md#use-plain-claude-or-codex).
+Headless workers, native administration and editor extensions retain their own
+launch configuration. `command claude` / `command codex` bypass these functions.
+
 `use` changes the launcher default for new sessions. Automatic handoffs are a
 separate opt-in workflow described below. Do not log out a current session to
 implement a switch. Do not overwrite or copy provider credential files.
@@ -68,8 +74,9 @@ shows managed runs and checkpoint paths. `ai-sub auto off [PROVIDER]` disables i
 Read [references/handoff.md](references/handoff.md) for setup and supported modes.
 
 New managed launches check capacity before starting a CLI and choose a verified,
-fresh standby when the selected account is already at its threshold. A known
-full window is not cleared by an empty or stale update. Do not tell a user that
+fresh standby when the selected account is already at its threshold or was last
+seen full before a still-future reset. An empty or stale update never clears known
+exhaustion or becomes fresh evidence for a mid-session handoff. Do not tell a user that
 an exhausted active session has switched just because another managed run is
 healthy: match the run's profile, directory, faults and checkpoint state.
 Claude-to-Claude handoffs preserve native manual/plan/acceptEdits/auto/dontAsk

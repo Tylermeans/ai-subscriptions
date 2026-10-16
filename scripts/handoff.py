@@ -431,8 +431,9 @@ def standby_profiles(store, current, rule, state):
 def last_known_exhausted(store, profile):
     """An empty status line must not erase a known full, not-yet-reset window.
 
-    This only prevents a launch. It never makes old data fresh or authorizes a
-    target, and a metadata rebind cuts off observations from the old account.
+    This prevents starting on the exhausted profile. A new session can select a
+    freshly verified standby independently; it never makes old data fresh or
+    authorizes a mid-session handoff. A rebind cuts off the old account's history.
     """
     with contextlib.closing(store.db()) as db:
         row = db.execute("SELECT source,windows FROM samples WHERE profile=? "
@@ -454,18 +455,15 @@ def initial_profile(store, profile, options):
     sample = store.latest(profile)
     if not rule["enabled"]:
         return profile, launch, None
-    if not needs_switch(sample, rule["threshold"]):
-        # Stale full windows cannot authorize a switch, but a still-future reset
-        # also gives no basis for treating that account as usable again.
-        if last_known_exhausted(store, profile):
-            raise app.UserError(f"{app.profile_key(profile)} was last seen exhausted; its quota is not fresh. "
-                                "Choose an available profile explicitly with ai-sub run PROVIDER NAME.")
+    known_full = last_known_exhausted(store, profile)
+    if not needs_switch(sample, rule["threshold"]) and not known_full:
         return profile, launch, None
     state = {"provider": profile["provider"], "launch_options": options, "launch_settings": {}}
     candidates, error = standby_profiles(store, profile, rule, state)
     if not candidates:
         reason = f" {error}" if error else ""
-        raise app.UserError(f"{app.profile_key(profile)} is at the handoff threshold and has no verified standby "
+        condition = ("was last seen exhausted" if known_full else "is at the handoff threshold")
+        raise app.UserError(f"{app.profile_key(profile)} {condition} and has no verified standby "
                             f"with complete quota less than five minutes old. No CLI started.{reason} "
                             "Use ai-sub status to inspect capacity or choose another profile explicitly.")
     target = candidates[0]
@@ -605,8 +603,8 @@ def supervise(store, profile, extra):
     print(f"Managed run: {run.directory.name}; task notes stay in {run.directory}", file=sys.stderr)
     print("Codex: review /hooks in each profile. Switching waits for trusted hooks and a safe checkpoint.", file=sys.stderr)
     if startup_source:
-        print(f"ai-sub: {app.profile_key(startup_source)} is at its quota threshold; "
-              f"starting {app.profile_key(profile)} before any task work begins.", file=sys.stderr, flush=True)
+        print(f"ai-sub: selecting fresh verified capacity on {app.profile_key(profile)} "
+              f"instead of {app.profile_key(startup_source)} before any task work begins.", file=sys.stderr, flush=True)
         with run.edit() as state:
             state["startup_route"] = {"from_profile": app.profile_key(startup_source),
                                       "to_profile": app.profile_key(profile)}

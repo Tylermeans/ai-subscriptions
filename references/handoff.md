@@ -48,10 +48,16 @@ the tool does not guess a standby account has reset.
 Before the first CLI launch, the same eligibility rules select a standby when
 the requested account's fresh usage has already reached its threshold. The
 original task prompt is sent once to the selected account, with no invented
-checkpoint. If no standby qualifies, no CLI is started. A last known full window
-with a future reset also blocks startup when subsequent readings are empty or
-stale; that old observation does not authorize a move or become fresh. A newer
-valid reading or an account metadata rebind supersedes it.
+checkpoint. A last known full window with a future reset also prevents starting
+on that profile when subsequent readings are empty or stale. Startup can still
+select an independently verified standby with fresh, complete quota. If none
+qualifies, no CLI is started. The old reading never becomes fresh and cannot
+trigger a mid-session handoff. A newer valid reading or an account metadata
+rebind supersedes it.
+
+For optional `claude` / `codex` shell functions that call this launcher, see
+[Use plain claude or codex](../README.md#use-plain-claude-or-codex). The account
+label is optional and defaults to the one selected with `ai-sub use`.
 
 ## Codex to Claude
 

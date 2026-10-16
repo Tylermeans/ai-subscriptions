@@ -588,6 +588,9 @@ def parser():
     s = sub.add_parser("run")
     s.add_argument("provider", choices=PROVIDERS)
     s.add_argument("args", nargs=argparse.REMAINDER)
+    s = sub.add_parser("native", help="Internal dispatcher for optional native.zsh shell integration")
+    s.add_argument("provider", choices=PROVIDERS)
+    s.add_argument("args", nargs=argparse.REMAINDER)
     s = sub.add_parser("auto", help="Configure cooperative mid-session account handoffs")
     s.add_argument("mode", choices=("on", "off", "status"))
     s.add_argument("provider", choices=PROVIDERS, nargs="?")
@@ -621,8 +624,17 @@ def parser():
 
 
 def main(argv=None):
-    os.umask(0o077)
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = parser().parse_args(argv)
+    if args.command in ("run", "native"):
+        # argparse removes a leading -- from REMAINDER. Preserve it so a quoted
+        # task following `run PROVIDER --` cannot be mistaken for an account name.
+        args.args = argv[2:]
+    if args.command == "native":
+        from native_shell import launch
+        extra = args.args[1:] if args.args[:1] == ["--"] else args.args
+        return launch(args.provider, extra)
+    os.umask(0o077)
     store = Store()
     action = args.command
     if action == "add":

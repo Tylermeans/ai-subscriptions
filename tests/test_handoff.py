@@ -159,18 +159,24 @@ class HandoffTests(unittest.TestCase):
             with self.assertRaisesRegex(app.UserError, "No CLI started"):
                 h.initial_profile(self.store, self.one, options)
 
-    def test_stale_exhausted_source_does_not_silently_launch_or_authorize_a_switch(self):
+    def test_stale_exhausted_source_routes_new_session_only_to_fresh_verified_standby(self):
         options, _ = h.managed_args("codex", [])
         self.save(self.one, 100, observed=time.time() - 301)
         with patch.object(app, "identity"), patch.object(app, "refresh"):
+            self.assertEqual(h.initial_profile(self.store, self.one, options)[0], self.two)
+            self.save(self.two, 10, observed=time.time() - 301)
             with self.assertRaisesRegex(app.UserError, "last seen exhausted"):
                 h.initial_profile(self.store, self.one, options)
+        self.request()
+        self.assertIsNone(self.run.read()["pending"])
 
     def test_missing_usage_does_not_erase_exhaustion_but_new_identity_does(self):
         options, _ = h.managed_args("codex", [])
         self.save(self.one, 100)
         self.store.save(self.one, [], "claude-statusline", error="No subscription quota")
         with patch.object(app, "identity"), patch.object(app, "refresh"):
+            self.assertEqual(h.initial_profile(self.store, self.one, options)[0], self.two)
+            self.save(self.two, 10, observed=time.time() - 301)
             with self.assertRaisesRegex(app.UserError, "last seen exhausted"):
                 h.initial_profile(self.store, self.one, options)
             self.store.save(self.one, [], "configuration", error="Account email changed")
@@ -578,10 +584,11 @@ class HandoffTests(unittest.TestCase):
         self.cross_fallback()
         self.exercise_supervisor(cross=True, stale_on_exit=True)
 
-    def test_supervisor_starts_healthy_claude_without_launching_exhausted_account(self):
+    def test_supervisor_skips_exhausted_claude_after_an_empty_usage_update(self):
         current = self.profile("current", "claude")
         standby = self.profile("midwest", "claude")
         self.save(current, 100)
+        self.store.save(current, [], "claude-statusline", error="No subscription quota")
         self.save(standby, 1)
         fake = self.cwd / "claude"
         fake.write_text("#!" + sys.executable + "\n" + '''
