@@ -35,7 +35,7 @@ const {renderTemplate} = require('../status');
     await page.goto(pathToFileURL(file).href);
     assert.equal(await page.locator('.card').count(), 3);
     assert.equal(await page.locator('progress').count(), 3);
-    assert.equal(await page.locator('.unknown').count(), 3);
+    assert.equal(await page.locator('.window.unknown').count(), 3);
     assert.match(await page.locator('.card').first().textContent(), /4%used/);
     assert.equal(await page.locator('.card').nth(1).locator('progress').count(), 0);
     assert.equal(await page.locator('.card').nth(2).locator('.old').count(), 2);
