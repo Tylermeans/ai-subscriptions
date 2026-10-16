@@ -334,6 +334,18 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(other.read()["prompts"], ["Different task"])
         self.assertIsNone(other.read()["pending"])
 
+    def test_session_status_does_not_report_restricted_process_as_stopped(self):
+        for error, expected in ((PermissionError(), "process check restricted"),
+                                (ProcessLookupError(), "supervisor stopped"),
+                                (OSError(), "supervisor status unknown")):
+            with self.subTest(error=type(error).__name__):
+                output = io.StringIO()
+                with patch.object(h.os, "kill", side_effect=error), contextlib.redirect_stdout(output):
+                    h.sessions(self.store)
+                self.assertIn(expected, output.getvalue())
+                if not isinstance(error, ProcessLookupError):
+                    self.assertNotIn("supervisor stopped", output.getvalue())
+
     def test_synthetic_checkpoint_request_not_saved_as_user_instruction(self):
         self.request()
         self.event("UserPromptSubmit", prompt=h.CHECKPOINT_REQUEST)

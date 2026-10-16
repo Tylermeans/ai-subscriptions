@@ -635,8 +635,12 @@ def sessions(store):
         try:
             os.kill(pid, 0)
             running = "supervisor present" if state.get("active") else "finished"
-        except (OSError, TypeError):
+        except ProcessLookupError:
             running = "supervisor stopped"
+        except PermissionError:
+            running = "process check restricted" if state.get("active") else "finished"
+        except (OSError, TypeError):
+            running = "supervisor status unknown"
         print(f'{state["id"]} | {state.get("profile", state["provider"])} | {running} | '
               f'{app.clean_text(state["status"])}')
         print(f'  Directory: {app.clean_text(state["cwd"])}')
