@@ -1,0 +1,9 @@
+.state/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
+dist/
+node_modules/
+*.vsix

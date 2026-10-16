@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-__AI_SUB_NONCE__'; script-src 'nonce-__AI_SUB_NONCE__'; base-uri 'none'; form-action 'none'">
+<title>AI Subscription Usage</title>
+<style nonce="__AI_SUB_NONCE__">
+:root { color-scheme: dark; --bg:#0d1422; --card:#151f30; --border:#2a374c; --muted:#a6b4c8; --text:#f1f5fb; --blue:#86b5ff; --teal:#6dd9c6; --amber:#ffd080; --red:#ff999f; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+main { max-width:1180px; margin:0 auto; padding:36px 30px 50px; }
+header { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin-bottom:28px; }
+.eyebrow { color:var(--teal); text-transform:uppercase; letter-spacing:.13em; font-size:11px; font-weight:700; margin:0 0 9px; }
+h1 { margin:0; font-size:32px; letter-spacing:-.035em; line-height:1.2; }
+.subtitle { color:var(--muted); margin:10px 0 0; }
+.actions { display:flex; gap:8px; padding-top:3px; flex-wrap:wrap; justify-content:flex-end; }
+button { font:inherit; font-size:12px; font-weight:600; border:1px solid var(--border); border-radius:7px; background:#202e45; color:var(--text); padding:9px 12px; cursor:pointer; }
+button:hover { border-color:var(--blue); }
+button:focus-visible { outline:2px solid var(--blue); outline-offset:3px; }
+button:disabled { opacity:.5; cursor:wait; }
+[hidden] { display:none !important; }
+.summary { display:flex; gap:28px; flex-wrap:wrap; padding:18px 0; margin-bottom:24px; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+.metric strong { font-size:22px; font-weight:650; padding-right:8px; }
+.metric span { color:var(--muted); font-size:12px; }
+#accounts { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,310px),1fr)); gap:16px; }
+.card { min-width:0; padding:22px; background:var(--card); border:1px solid var(--border); border-radius:12px; }
+.card-top { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+.provider { font-size:12px; font-weight:700; color:var(--blue); text-transform:uppercase; letter-spacing:.08em; }
+.claude .provider { color:var(--teal); }
+h2 { font-size:20px; margin:3px 0 0; letter-spacing:-.02em; overflow-wrap:anywhere; }
+.badge { display:inline-block; border-radius:5px; padding:3px 7px; color:var(--muted); border:1px solid var(--border); font-size:10px; white-space:nowrap; }
+.badge.fresh { color:var(--teal); border-color:#376c69; }
+.badge.stale, .badge.refresh-needed { color:var(--amber); border-color:#78603d; }
+.email { font-size:12px; color:var(--muted); margin:9px 0 0; overflow-wrap:anywhere; min-height:19px; }
+.default { font-size:10px; margin:7px 0 0; color:var(--muted); min-height:16px; }
+.windows { margin:24px 0 20px; display:grid; gap:22px; }
+.window-heading { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+.window-label { font-size:12px; font-weight:600; }
+.window-value { font-size:25px; font-weight:650; font-variant-numeric:tabular-nums; letter-spacing:-.04em; }
+.window-value small { color:var(--muted); font-size:11px; font-weight:400; letter-spacing:normal; padding-left:4px; }
+.track { margin-top:7px; height:9px; position:relative; border-radius:5px; background:#263449; overflow:hidden; }
+progress { display:block; width:100%; height:9px; border:0; appearance:none; background:transparent; }
+progress::-webkit-progress-bar { background:transparent; }
+progress::-webkit-progress-value { background:var(--blue); border-radius:5px; }
+progress::-moz-progress-bar { background:var(--blue); border-radius:5px; }
+.claude progress::-webkit-progress-value { background:var(--teal); }
+.claude progress::-moz-progress-bar { background:var(--teal); }
+.near progress::-webkit-progress-value { background:var(--amber); }
+.near progress::-moz-progress-bar { background:var(--amber); }
+.blocked progress::-webkit-progress-value { background:var(--red); }
+.blocked progress::-moz-progress-bar { background:var(--red); }
+.old progress { opacity:.45; }
+.unknown .track { background:repeating-linear-gradient(110deg,#263449 0,#263449 7px,#1c293e 7px,#1c293e 14px); }
+.reset { color:var(--muted); font-size:11px; margin:7px 0 0; }
+.account-note { border-top:1px solid var(--border); padding-top:14px; color:var(--muted); font-size:11px; min-height:64px; }
+.policy { margin:13px 0 0; font-size:11px; color:var(--muted); }
+code { font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; color:var(--text); overflow-wrap:anywhere; }
+.hint { margin:10px 0 0; }
+.observed { font-size:10px; color:var(--muted); margin:14px 0 0; }
+.notice { margin:22px 0 0; border:1px solid var(--border); border-radius:8px; padding:16px 18px; color:var(--muted); font-size:12px; }
+.notice strong { color:var(--text); font-weight:600; }
+#error { color:var(--red); border-color:#77434e; }
+footer { display:flex; justify-content:space-between; gap:20px; color:var(--muted); margin-top:20px; font-size:11px; }
+.empty { padding:32px; border:1px dashed var(--border); border-radius:12px; color:var(--muted); }
+@media(max-width:650px) { main { padding:24px 18px; } header { display:block; } h1 { font-size:28px; } .actions { justify-content:flex-start; margin-top:18px; } footer { display:block; } .summary { gap:16px; } }
+@media(prefers-contrast:more) { :root { --border:#a6b4c8; --muted:#d9e2ef; } .old progress { opacity:1; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><p class="eyebrow">AI Subscriptions · local account monitor</p><h1>Subscription usage</h1><p class="subtitle">Each account. Every reported window. Percentages show usage consumed.</p></div>
+    <div class="actions"><button id="refresh">Refresh display</button><button id="fetch" hidden>Fetch Codex usage</button></div>
+  </header>
+  <div class="summary" aria-label="Account summary">
+    <div class="metric"><strong id="count">0</strong><span>accounts</span></div>
+    <div class="metric"><strong id="fresh-count">0</strong><span>fresh reports</span></div>
+    <div class="metric"><strong id="unknown-count">0</strong><span>need usage updates</span></div>
+  </div>
+  <div id="error" class="notice" role="status" hidden></div>
+  <div id="accounts"></div>
+  <div class="notice"><strong>Claude usage appears after a response in a session started with <code>ai-sub run claude</code>, when the CLI supplies it.</strong> Idle account data becomes stale after 15 minutes. Missing windows are shown as “Not reported,” never 0%. Automatic standby selection currently requires both short-window and weekly data.</div>
+  <footer><span id="updated"></span><span id="mode-label">Local observations only · no model requests</span></footer>
+</main>
+<script nonce="__AI_SUB_NONCE__" type="application/json" id="initial-data">__AI_SUB_DATA__</script>
+<script nonce="__AI_SUB_NONCE__">
+(() => {
+  'use strict';
+  const mode = '__AI_SUB_MODE__';
+  const vscode = typeof acquireVsCodeApi === 'function' ? acquireVsCodeApi() : null;
+  const $ = id => document.getElementById(id);
+  const node = (tag, className, text) => {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined) element.textContent = text;
+    return element;
+  };
+  const date = seconds => Number.isFinite(seconds)
+    ? new Date(seconds * 1000).toLocaleString(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit', timeZoneName:'short'}) : 'not reported';
+  function windowLabel(w) {
+    if (w.minutes === 10080) return 'Weekly window';
+    if (w.minutes === 300) return '5-hour window';
+    if (w.minutes && w.minutes < 10080) return `${w.minutes / 60}-hour window`;
+    return w.label || 'Additional window';
+  }
+  function windowView(w, label, account) {
+    const known = !!w && Number.isFinite(w.used);
+    const old = account.freshness !== 'fresh';
+    const section = node('div', `window ${known ? '' : 'unknown'} ${old ? 'old' : ''} ${known && w.used >= account.automatic.threshold ? 'near' : ''} ${account.sample?.blocked ? 'blocked' : ''}`);
+    const heading = node('div', 'window-heading');
+    heading.append(node('span', 'window-label', label));
+    const number = node('span', 'window-value', known ? `${Math.round(w.used * 10) / 10}%` : '—');
+    number.append(node('small', '', known ? (old ? 'last seen' : 'used') : 'not reported'));
+    heading.append(number);
+    const track = node('div', 'track');
+    if (known) {
+      const bar = node('progress'); bar.max = 100; bar.value = Math.max(0, Math.min(100, w.used));
+      bar.setAttribute('aria-label', `${account.profile}: ${label}, ${w.used}% used${old ? ', previous observation' : ''}`);
+      track.append(bar);
+    }
+    section.append(heading, track, node('p', 'reset', known ? `Resets ${date(w.reset)}` : 'No measurement supplied by the CLI'));
+    return section;
+  }
+  function accountView(account) {
+    const card = node('article', `card ${account.provider}`);
+    const top = node('div', 'card-top');
+    const title = node('div');
+    title.append(node('div', 'provider', account.provider === 'codex' ? 'Codex' : 'Claude'), node('h2', '', account.name));
+    top.append(title, node('span', `badge ${account.freshness.replaceAll(' ', '-')}`, account.freshness === 'unknown' ? 'Awaiting data' : account.freshness));
+    card.append(top, node('p', 'email', account.email || 'Email not configured'), node('p', 'default', account.default ? 'Default for new sessions' : 'Additional account'));
+    const windows = node('div', 'windows');
+    const reported = account.sample?.windows || [];
+    const short = reported.filter(w => w.minutes && w.minutes < 10080);
+    const weekly = reported.filter(w => w.minutes === 10080);
+    for (const [group, placeholder] of [[short, 'Short window'], [weekly, 'Weekly window']]) {
+      if (!group.length) windows.append(windowView(null, placeholder, account));
+      else group.forEach(w => windows.append(windowView(w, windowLabel(w) + (group.length > 1 ? ` · ${w.label}` : ''), account)));
+    }
+    reported.filter(w => !short.includes(w) && !weekly.includes(w)).forEach(w => windows.append(windowView(w, windowLabel(w), account)));
+    card.append(windows);
+    const note = node('div', 'account-note', account.sample?.error || account.capacity);
+    if (account.provider === 'claude' && account.freshness !== 'fresh') {
+      const hint = node('p', 'hint', 'Collect usage in a terminal: ');
+      hint.append(node('code', '', `ai-sub run claude ${account.name}`)); note.append(hint);
+    }
+    card.append(note, node('p', 'policy', account.automatic.enabled ? `Automatic handoff requested at ${account.automatic.threshold}% used` : 'Automatic handoff is off'),
+      node('p', 'observed', account.sample ? `Usage observed ${date(account.sample.observed)}` : 'No usage observations yet'));
+    return card;
+  }
+  function render(data) {
+    const accounts = (Array.isArray(data.profiles) ? data.profiles : []).map(account => {
+      if (account.sample && account.freshness === 'fresh') {
+        const now = Date.now() / 1000;
+        if (now - account.sample.observed > 900 || account.sample.observed > now + 60) return {...account, freshness:'stale'};
+        if (account.sample.windows.some(w => !w.reset || w.reset <= now)) return {...account, freshness:'refresh needed'};
+      }
+      return account;
+    });
+    $('count').textContent = accounts.length;
+    const fresh = accounts.filter(a => a.freshness === 'fresh').length;
+    $('fresh-count').textContent = fresh;
+    $('unknown-count').textContent = accounts.length - fresh;
+    $('accounts').replaceChildren(...accounts.map(accountView));
+    if (!accounts.length) $('accounts').append(node('div', 'empty', 'No accounts registered. Install the terminal tool, then run ai-sub list or ai-sub add PROVIDER NAME --email ADDRESS.'));
+    $('updated').textContent = `Display read ${date(data.generated_at)}`;
+    $('error').hidden = true;
+    const age = Date.now() / 1000 - data.generated_at;
+    $('mode-label').textContent = vscode ? 'Updates every 15 seconds by default · local observations only'
+      : mode === 'live-file' && age < 45 ? 'Updates every 15 seconds while ai-sub dashboard is running' : 'Saved snapshot · run ai-sub dashboard for live display updates';
+  }
+  $('refresh').addEventListener('click', () => vscode ? vscode.postMessage({type:'refresh'}) : location.reload());
+  $('fetch').hidden = !vscode;
+  $('fetch').addEventListener('click', () => { $('fetch').disabled = true; vscode.postMessage({type:'fetchCodex'}); });
+  window.addEventListener('message', event => {
+    if (!vscode || !event.data) return;
+    if (event.data.type === 'snapshot') { render(event.data.data); }
+    if (event.data.type === 'error') { $('error').textContent = event.data.message; $('error').hidden = false; }
+    if (event.data.type === 'fetchDone') $('fetch').disabled = false;
+  });
+  render(JSON.parse($('initial-data').textContent));
+  if (vscode) vscode.postMessage({type:'ready'});
+  else if (mode === 'live-file') setTimeout(() => location.reload(), 15000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI Subscriptions"
+  short_description: "Switch CLI accounts and track subscription usage"
+  default_prompt: "Use $ai-subscriptions to check my Codex and Claude usage and help me switch subscription accounts."

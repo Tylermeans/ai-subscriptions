@@ -1,0 +1,31 @@
+{
+  "name": "ai-subscriptions",
+  "displayName": "AI Subscription Usage",
+  "description": "Codex and Claude subscription usage in the right side of the status bar, with an account usage chart.",
+  "version": "0.2.0",
+  "publisher": "tylermeans",
+  "license": "UNLICENSED",
+  "engines": {"vscode": "^1.95.0"},
+  "categories": ["Other"],
+  "repository": {"type": "git", "url": "https://github.com/tylermeans/ai-subscriptions.git", "directory": "vscode"},
+  "main": "./extension.js",
+  "extensionKind": ["ui"],
+  "activationEvents": ["onStartupFinished"],
+  "capabilities": {"untrustedWorkspaces": {"supported": true}, "virtualWorkspaces": {"supported": false}},
+  "contributes": {
+    "commands": [
+      {"command": "aiSubscriptions.showUsage", "title": "AI Subscriptions: Show Usage Chart"},
+      {"command": "aiSubscriptions.refresh", "title": "AI Subscriptions: Refresh Display"},
+      {"command": "aiSubscriptions.fetchCodex", "title": "AI Subscriptions: Fetch Codex Usage"}
+    ],
+    "configuration": {
+      "title": "AI Subscription Usage",
+      "properties": {
+        "aiSubscriptions.executablePath": {"type": "string", "default": "", "scope": "machine", "description": "Absolute path to ai-sub. Empty uses ~/.local/bin/ai-sub, then PATH. Set this in User settings."},
+        "aiSubscriptions.stateDirectory": {"type": "string", "default": "", "scope": "machine", "description": "Optional absolute AI_SUB_HOME directory. Leave empty for the installed tool's default state."},
+        "aiSubscriptions.refreshSeconds": {"type": "integer", "default": 15, "minimum": 5, "maximum": 300, "scope": "machine", "description": "How often to read saved observations. This does not make provider or model requests."}
+      }
+    }
+  },
+  "scripts": {"test": "node --test test/*.test.js", "package": "python3 ../scripts/build_vscode.py"}
+}

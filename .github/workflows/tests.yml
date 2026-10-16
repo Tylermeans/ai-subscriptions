@@ -1,0 +1,61 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: macOS / Python ${{ matrix.python }}
+    runs-on: macos-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Test account isolation, quota handling and portable installation
+        run: python3 -m unittest discover -s tests -v
+      - name: Compile Python sources
+        run: python3 -m py_compile scripts/*.py install.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test VS Code usage indicator
+        run: node --test vscode/test/*.test.js
+      - name: Build extension from source allowlist
+        run: python3 scripts/build_vscode.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vscode-extension-python-${{ matrix.python }}
+          path: dist/*.vsix
+
+  chart:
+    name: Usage chart in Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser test tooling outside the checkout
+        run: |
+          npm install --prefix "$RUNNER_TEMP/chart-tools" playwright@1.59.1
+          "$RUNNER_TEMP/chart-tools/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Verify chart with synthetic account data
+        run: NODE_PATH="$RUNNER_TEMP/chart-tools/node_modules" AI_SUB_SCREENSHOTS="$RUNNER_TEMP/chart-screenshots" node vscode/test/browser-check.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: usage-chart-previews
+          path: ${{ runner.temp }}/chart-screenshots/*.png
