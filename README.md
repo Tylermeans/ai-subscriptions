@@ -254,6 +254,13 @@ is 90% used; supported values are 50–95%. Start the task with `ai-sub run` aft
 enabling it. `ai-sub auto off claude` disables future handoffs while leaving the
 active CLI running.
 
+Before starting a new managed session, ai-sub checks the selected account's
+quota. If fresh usage is already at the threshold, it selects a verified standby
+with fresh capacity **before launching a CLI**. If none qualifies, it explains
+the problem and stops. An empty or stale reading does not erase an earlier full
+window whose recorded reset is still in the future. This startup check does not
+need a checkpoint because the new task has not begun.
+
 For a handoff to happen:
 
 - A distinct account of the same provider, or an explicitly configured Claude
@@ -283,6 +290,23 @@ quota cannot be refreshed by this helper.** Same-provider switching is the defau
 Codex → Claude requires the explicit fallback below. Claude → Codex is not yet
 supported. See
 [handoff setup and recovery](references/handoff.md) for full details.
+
+If an existing Claude session has already hit its limit, it may be unable to
+produce a checkpoint. Cancel its automatic retry with Esc, exit Claude with
+`/exit`, then run this **at your shell prompt** with your available profile:
+
+```sh
+cd /absolute/path/to/your/worktree
+ai-sub run claude backup -- --permission-mode auto
+```
+
+Typing `claude ...` or `ai-sub ...` into Claude's conversation prompt does not
+change the account of that running session. Repository edits remain on disk;
+without a checkpoint the previous conversation is not automatically transferred.
+Give the new session the task scope and any existing handoff notes. Supported
+Claude mode changes (`manual`, `plan`, `acceptEdits`, `auto`, `dontAsk`) are now
+preserved during Claude-to-Claude handoffs. Modes that bypass permission checks
+remain unsupported, and failures that prevent handoff are printed in the terminal.
 
 ## Codex → Claude fallback
 
@@ -391,6 +415,7 @@ may contain confidential project context; do not put secrets in them.
 | An account is listed but cannot launch | Run `ai-sub verify PROVIDER NAME`, then `ai-sub login PROVIDER NAME` if needed. Registration alone is not authentication. |
 | Login cannot start its OAuth callback server | Run `ai-sub login PROVIDER NAME` in your regular Mac terminal outside the agent sandbox. |
 | Claude usage is unknown or stale | Launch that profile with `ai-sub run claude NAME`. A response can supply quota; `--refresh` does not fetch idle Claude usage. |
+| Claude keeps retrying a weekly limit | Cancel the retry, exit to your shell, then launch an available profile explicitly. A failed turn cannot create the task checkpoint needed for a safe mid-session handoff. |
 | Auto is on but no switch occurs | Check `ai-sub sessions` and `ai-sub status`. A fresh eligible standby, trusted hooks and a safe checkpoint are all required. |
 | Only a weekly window appears | The chart shows it accurately, but current standby selection also requires a short window. Missing is not zero. |
 | Native resume/worktree/print options are rejected | Use a supported interactive launch in an existing worktree, or disable automatic mode for native passthrough. |

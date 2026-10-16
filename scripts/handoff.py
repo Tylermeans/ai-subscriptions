@@ -20,6 +20,7 @@ import ai_sub as app
 
 MAX_SWITCHES = 8
 LEASE_SECONDS = 20
+CLAUDE_MODES = {"manual", "default", "plan", "acceptEdits", "auto", "dontAsk"}
 CHECKPOINT_REQUEST = '''AI-SUB HANDOFF REQUEST: Pause this task at a safe boundary for an account change.
 Finish or wait for all running commands, subagents, background jobs, and scheduled wakeups.
 Do not start new implementation work. Do not commit, stash, reset, or undo changes for this handoff.
@@ -146,7 +147,7 @@ class Run:
                 stop_requests=0, skip_prompt=prompt, hooks_seen=[], permission_mode=None,
                 initial_permission_mode=None,
                 launch_options=options if options is not None else managed_args(profile["provider"], [])[0],
-                launch_settings=settings or {}, monitor_error=None, fallback_error=None)
+                launch_settings=settings or {}, monitor_error=None, fallback_error=None, recovery_note=None)
         return state["attempt"]
 
 
@@ -202,10 +203,26 @@ def hook_event(run, payload, attempt):
             return {}, False
         state["hooks_seen"] = sorted(set(state["hooks_seen"] + [event]))
         if payload.get("permission_mode"):
-            state["permission_mode"] = payload["permission_mode"]
+            mode = payload["permission_mode"]
+            mode = "default" if mode == "manual" else mode
+            previous_mode = state.get("permission_mode")
+            state["permission_mode"] = mode
             if state["initial_permission_mode"] is None:
-                state["initial_permission_mode"] = payload["permission_mode"]
-            elif state["initial_permission_mode"] != payload["permission_mode"]:
+                state["initial_permission_mode"] = mode
+            if state["provider"] == "claude":
+                if mode not in CLAUDE_MODES:
+                    state["fault"] = "Unsupported Claude permission mode; automatic handoff suspended."
+                else:
+                    # A native user mode change is authoritative. Preserve it for
+                    # the next Claude account without enabling bypassPermissions.
+                    options = state["launch_options"]
+                    state["launch_options"] = [value for i, value in enumerate(options)
+                        if value != "--permission-mode" and (i == 0 or options[i - 1] != "--permission-mode")]
+                    state["launch_options"] += ["--permission-mode", "manual" if mode == "default" else mode]
+                if previous_mode is not None and previous_mode != mode:
+                    state["ready_until"] = 0
+                    state["checkpoint"] = None
+            elif state["initial_permission_mode"] != mode:
                 state["fault"] = "Session permissions changed; restart a managed session to enable handoff."
         if event == "SessionStart":
             if state["status"] == "waiting for hooks":
@@ -259,6 +276,10 @@ def hook_event(run, payload, attempt):
         elif event in ("Interrupt", "StopFailure", "SessionEnd"):
             state["ready_until"] = 0
             state["status"] = "interrupted" if event == "Interrupt" else "stopped without handoff"
+            if event == "StopFailure" and payload.get("error") == "rate_limit":
+                state["status"] = "rate limited; no safe checkpoint"
+                state["recovery_note"] = ("Exit this CLI, then start ai-sub run with an available profile. "
+                    "No task checkpoint was saved; existing repository edits remain in place.")
             # Never infer safety from a rate-limit error or user interruption.
         elif event == "Stop" and state["pending"] and not state["fault"]:
             checkpoint = checkpoint_from(payload.get("last_assistant_message"))
@@ -330,8 +351,8 @@ def managed_args(provider, extra):
                 value = extra[i]
             if key in ("-s", "--sandbox") and value not in ("read-only", "workspace-write"):
                 raise app.UserError("Managed handoffs support read-only or workspace-write sandbox mode.")
-            if key == "--permission-mode" and value not in ("manual", "plan", "acceptEdits"):
-                raise app.UserError("Managed handoffs support manual, plan, or acceptEdits permission mode.")
+            if key == "--permission-mode" and value not in CLAUDE_MODES:
+                raise app.UserError("Managed handoffs support manual, plan, acceptEdits, auto, or dontAsk permission mode.")
             options += [key, value]
         elif arg in flags:
             options.append(arg)
@@ -378,6 +399,79 @@ def replacement_launch(state, target):
         "permissions": {"ask": ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch"]}}}
 
 
+def standby_profiles(store, current, rule, state):
+    """Shared eligibility for startup routing and cooperative mid-session moves."""
+    candidates = []
+    available = app.chosen_profiles(store, current["provider"])
+    fallback_error = None
+    if current["provider"] == "codex" and rule.get("fallback"):
+        try:
+            target = store.profile(*rule["fallback"].split("/"))
+            replacement_launch(state, target)
+            available.append(target)
+        except (app.UserError, TypeError, ValueError) as exc:
+            fallback_error = str(exc)
+    for candidate in available:
+        if app.profile_key(candidate) == app.profile_key(current):
+            continue
+        try:
+            app.refresh(store, candidate)
+            # Verify identity before treating a profile as spare subscription capacity.
+            app.identity(store, candidate)
+            candidate = store.profile(candidate["provider"], candidate["name"])
+            if eligible(store, current, candidate, rule["threshold"]):
+                candidates.append(candidate)
+        except (app.UserError, OSError, subprocess.SubprocessError):
+            continue
+    candidates.sort(key=lambda p: (p["provider"] != current["provider"],
+                                  max(w["used"] for w in store.latest(p)["windows"])))
+    return candidates, fallback_error
+
+
+def last_known_exhausted(store, profile):
+    """An empty status line must not erase a known full, not-yet-reset window.
+
+    This only prevents a launch. It never makes old data fresh or authorizes a
+    target, and a metadata rebind cuts off observations from the old account.
+    """
+    with contextlib.closing(store.db()) as db:
+        row = db.execute("SELECT source,windows FROM samples WHERE profile=? "
+                         "AND (source='configuration' OR (error IS NULL AND windows<>'[]')) "
+                         "ORDER BY observed DESC,id DESC LIMIT 1", (app.profile_key(profile),)).fetchone()
+    if not row or row[0] == "configuration":
+        return False
+    return any(w["used"] >= 100 and w.get("reset") and w["reset"] > time.time()
+               for w in json.loads(row[1]))
+
+
+def initial_profile(store, profile, options):
+    """Choose capacity before starting any agent; there is no task to checkpoint yet."""
+    app.identity(store, profile)
+    profile = store.profile(profile["provider"], profile["name"])
+    app.refresh(store, profile)
+    rule = policy(store, profile["provider"])
+    launch = {"provider": profile["provider"], "options": options, "settings": {}}
+    sample = store.latest(profile)
+    if not rule["enabled"]:
+        return profile, launch, None
+    if not needs_switch(sample, rule["threshold"]):
+        # Stale full windows cannot authorize a switch, but a still-future reset
+        # also gives no basis for treating that account as usable again.
+        if last_known_exhausted(store, profile):
+            raise app.UserError(f"{app.profile_key(profile)} was last seen exhausted; its quota is not fresh. "
+                                "Choose an available profile explicitly with ai-sub run PROVIDER NAME.")
+        return profile, launch, None
+    state = {"provider": profile["provider"], "launch_options": options, "launch_settings": {}}
+    candidates, error = standby_profiles(store, profile, rule, state)
+    if not candidates:
+        reason = f" {error}" if error else ""
+        raise app.UserError(f"{app.profile_key(profile)} is at the handoff threshold and has no verified standby "
+                            f"with complete quota less than five minutes old. No CLI started.{reason} "
+                            "Use ai-sub status to inspect capacity or choose another profile explicitly.")
+    target = candidates[0]
+    return target, replacement_launch(state, target), profile
+
+
 def poll_quota(store, run, profile, attempt=None):
     rule = policy(store, profile["provider"])
     state = run.read()
@@ -399,30 +493,7 @@ def poll_quota(store, run, profile, attempt=None):
         if state.get("pending"):
             run.change(attempt, pending=None, ready_until=0, status="monitoring")
         return
-    candidates = []
-    available = app.chosen_profiles(store, profile["provider"])
-    fallback_error = None
-    if profile["provider"] == "codex" and rule.get("fallback"):
-        try:
-            target = store.profile(*rule["fallback"].split("/"))
-            replacement_launch(state, target)
-            available.append(target)
-        except (app.UserError, TypeError, ValueError) as exc:
-            fallback_error = str(exc)
-    for candidate in available:
-        if app.profile_key(candidate) == app.profile_key(current):
-            continue
-        app.refresh(store, candidate)
-        try:
-            # Verify identity before treating a profile as spare subscription capacity.
-            app.identity(store, candidate)
-            candidate = store.profile(candidate["provider"], candidate["name"])
-            if eligible(store, current, candidate, rule["threshold"]):
-                candidates.append(candidate)
-        except (app.UserError, OSError, subprocess.SubprocessError):
-            continue
-    candidates.sort(key=lambda p: (p["provider"] != current["provider"],
-                                  max(w["used"] for w in store.latest(p)["windows"])))
+    candidates, fallback_error = standby_profiles(store, current, rule, state)
     with run.edit() as data:
         if data["attempt"] != attempt or not data["active"] or data["status"] == "switching":
             return
@@ -527,17 +598,24 @@ def supervise(store, profile, extra):
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise app.UserError("Automatic handoff requires an interactive terminal. Use auto off for scripts.")
     options, prompt = managed_args(profile["provider"], extra)
-    settings = {}
+    profile, launch, startup_source = initial_profile(store, profile, options)
+    options, settings = launch["options"], launch["settings"]
     cwd = Path.cwd().resolve()
     run = Run.create(store, profile["provider"], cwd, prompt)
     print(f"Managed run: {run.directory.name}; task notes stay in {run.directory}", file=sys.stderr)
     print("Codex: review /hooks in each profile. Switching waits for trusted hooks and a safe checkpoint.", file=sys.stderr)
+    if startup_source:
+        print(f"ai-sub: {app.profile_key(startup_source)} is at its quota threshold; "
+              f"starting {app.profile_key(profile)} before any task work begins.", file=sys.stderr, flush=True)
+        with run.edit() as state:
+            state["startup_route"] = {"from_profile": app.profile_key(startup_source),
+                                      "to_profile": app.profile_key(profile)}
     # Both processes remain in the terminal's foreground group. Let the native CLI
     # handle Ctrl-C; a Python handler (not SIG_IGN) is reset on exec in the child.
     terminal = termios.tcgetattr(sys.stdin.fileno())
     previous_sigint = signal.signal(signal.SIGINT, lambda *_: None)
     child = None
-    expected_target = None
+    expected_target = fingerprint(profile) if startup_source else None
     try:
         while True:
             profile = store.profile(profile["provider"], profile["name"])
@@ -547,13 +625,16 @@ def supervise(store, profile, extra):
             if expected_target:
                 # Native login checks and outgoing shutdown take time. Recheck the
                 # target after them, before any replacement process can run.
-                data = app.read_json(run.read()["handoff_path"])
-                outgoing = store.profile(*data["from_profile"].split("/", 1))
+                state = run.read()
+                source_key = (app.profile_key(startup_source) if startup_source else
+                              app.read_json(state["handoff_path"])["from_profile"])
+                outgoing = store.profile(*source_key.split("/", 1))
                 rule = policy(store, outgoing["provider"])
                 if (fingerprint(profile) != expected_target or not rule["enabled"]
                         or not eligible(store, outgoing, profile, rule["threshold"])):
                     raise app.UserError("Replacement no longer qualifies; no new CLI started. "
-                                        "Checkpoint retained: " + run.read()["handoff_path"])
+                                        + ("Checkpoint retained: " + state["handoff_path"]
+                                           if state.get("handoff_path") else "Check ai-sub status and try again."))
             attempt = run.begin(profile, prompt, hooks_ok, options, settings)
             if not hooks_ok:
                 print("ai-sub: automatic handoff is suspended until all hooks are trusted. "
@@ -566,10 +647,16 @@ def supervise(store, profile, extra):
             stopped = threading.Event()
             worker = threading.Thread(target=monitor, args=(store, run, profile, stopped, attempt), daemon=True)
             worker.start()
-            started, warned = time.monotonic(), False
+            startup_source = None
+            started, warned, last_notice = time.monotonic(), False, None
             target = None
             try:
                 while child.poll() is None:
+                    state = run.read()
+                    notice = state.get("fault") or state.get("recovery_note")
+                    if notice and notice != last_notice:
+                        print(f"ai-sub: {app.clean_text(notice)}", file=sys.stderr, flush=True)
+                        last_notice = notice
                     if time.monotonic() - started > 30 and not warned and not run.read().get("session_id"):
                         print("ai-sub: lifecycle hooks are not active; automatic handoff is unavailable. "
                               "Review /hooks and restart this managed run.", file=sys.stderr, flush=True)
@@ -650,6 +737,8 @@ def sessions(store):
             print(f'  {state["monitor_error"]}')
         if state.get("fallback_error"):
             print(f'  Fallback unavailable: {app.clean_text(state["fallback_error"])}')
+        if state.get("recovery_note"):
+            print(f'  {app.clean_text(state["recovery_note"])}')
         if state.get("handoff_path"):
             print(f'  Continuation: {state["handoff_path"]}')
     if not paths:

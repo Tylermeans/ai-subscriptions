@@ -45,6 +45,14 @@ windows below the configured threshold. A same-provider standby's verified email
 must differ from the outgoing account's. Missing or stale measurements prevent a handoff;
 the tool does not guess a standby account has reset.
 
+Before the first CLI launch, the same eligibility rules select a standby when
+the requested account's fresh usage has already reached its threshold. The
+original task prompt is sent once to the selected account, with no invented
+checkpoint. If no standby qualifies, no CLI is started. A last known full window
+with a future reset also blocks startup when subsequent readings are empty or
+stale; that old observation does not authorize a move or become fresh. A newer
+valid reading or an account metadata rebind supersedes it.
+
 ## Codex to Claude
 
 An explicit fallback allows a different provider to continue the task:
@@ -129,7 +137,7 @@ current files before continuing. Completed tasks and tasks awaiting the user
 start an idle CLI instead of automatically sending a continuation prompt.
 
 At most eight automatic handoffs occur per managed run. Profile changes,
-directory changes, permission-mode changes, missing hooks, active jobs, invalid
+directory changes, unsupported permission-mode changes, missing hooks, active jobs, invalid
 checkpoints, stale data and failed identity verification suspend or cancel the
 handoff. A missing checkpoint gets at most one Stop-hook retry per user turn.
 An API failure or user interrupt alone is never evidence of a safe stopping
@@ -148,15 +156,19 @@ Allowed arguments:
 | Provider | Options |
 | --- | --- |
 | Codex | `--model`/`-m`, `--sandbox`/`-s` (`read-only` or `workspace-write`), `--ask-for-approval`/`-a`, `--search`, `--no-alt-screen`, `--no-daemon` |
-| Claude | `--model`, `--effort`, `--permission-mode` (`manual`, `plan`, `acceptEdits`), `--chrome`, `--no-chrome`, `--verbose` |
+| Claude | `--model`, `--effort`, `--permission-mode` (`manual`/`default`, `plan`, `acceptEdits`, `auto`, `dontAsk`), `--chrome`, `--no-chrome`, `--verbose` |
 
 Without explicit permission options, managed Codex uses `workspace-write` and
 `on-request`; managed Claude uses `manual`. These explicit options are preserved
 across same-provider handoffs. The cross-provider policy is described above.
 Codex uses `--no-daemon` so the supervised session owns its
 process lifecycle. Profile-specific plugins, MCP servers and other settings
-are not copied; configure each profile for the tools its tasks need. A change
-to permissions inside a running session suspends handoffs until restart.
+are not copied; configure each profile for the tools its tasks need. A supported
+Claude mode change reported by its native hooks is recorded and carried into the
+replacement Claude session. It revokes any prior checkpoint lease so permission
+changes cannot reuse an old stopping boundary. `bypassPermissions` and unknown
+modes suspend handoffs. Codex permission-mode changes still require a restart;
+they cannot be translated from hook metadata alone.
 
 Use `ai-sub auto off PROVIDER` for the original native argument passthrough.
 Existing bare `codex`/`claude`, desktop and VS Code extension sessions are not
@@ -193,6 +205,14 @@ session in the recorded directory and ask it to read the checkpoint shown by
 `ai-sub sessions`. Check that the previous process has exited before continuing
 in another terminal. An agent that never produced a checkpoint has no invented
 continuation summary.
+
+A Claude `StopFailure` with `error: rate_limit` is displayed as
+`rate limited; no safe checkpoint`, with a recovery note. The supervisor prints
+that note or any fault in the managed terminal so suspension is not silent.
+The failure cannot authorize terminating a potentially busy process. Exit the
+rate-limited CLI and start an available profile in the same worktree; provide
+task context when no checkpoint exists. A fresh launch runs the startup capacity
+check above. Retrying inside an exhausted conversation cannot change its account.
 
 ## Validation and provider contracts
 

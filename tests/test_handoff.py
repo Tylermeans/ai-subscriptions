@@ -120,6 +120,70 @@ class HandoffTests(unittest.TestCase):
         self.request()
         self.assertEqual(self.run.read()["pending"]["target"], "claude/two")
 
+    def test_initial_routing_avoids_exhausted_claude_before_starting_a_session(self):
+        current = self.profile("current", "claude")
+        standby = self.profile("midwest", "claude")
+        self.save(current, 100)
+        self.save(standby, 1)
+        options, _ = h.managed_args("claude", ["--permission-mode", "auto"])
+        with patch.object(app, "identity"), patch.object(app, "refresh"):
+            target, launch, source = h.initial_profile(self.store, current, options)
+        self.assertEqual(target, standby)
+        self.assertEqual(source, current)
+        self.assertEqual(launch["options"], ["--permission-mode", "auto"])
+
+    def test_initial_routing_requires_verified_fresh_standby(self):
+        self.save(self.one, 100)
+        options, _ = h.managed_args("codex", [])
+        with patch.object(app, "identity"), patch.object(app, "refresh"):
+            self.save(self.two, 10, observed=time.time() - 301)
+            with self.assertRaisesRegex(app.UserError, "No CLI started"):
+                h.initial_profile(self.store, self.one, options)
+            self.save(self.two, 10)
+            with patch.object(app, "identity", side_effect=app.UserError("Cannot verify identity")):
+                with self.assertRaises(app.UserError):
+                    h.initial_profile(self.store, self.one, options)
+
+    def test_initial_routing_keeps_healthy_account_and_requires_cross_provider_opt_in(self):
+        target = self.cross_fallback()
+        options, _ = h.managed_args("codex", ["--model", "codex-model"])
+        with patch.object(app, "identity"), patch.object(app, "refresh"):
+            self.save(self.one, 20)
+            self.assertEqual(h.initial_profile(self.store, self.one, options)[0], self.one)
+            self.save(self.one, 100)
+            selected, launch, _ = h.initial_profile(self.store, self.one, options)
+            self.assertEqual(selected, target)
+            self.assertEqual(launch["options"], ["--permission-mode", "manual"])
+            with contextlib.redirect_stdout(io.StringIO()):
+                h.configure(self.store, "on", "codex", clear_fallback=True)
+            with self.assertRaisesRegex(app.UserError, "No CLI started"):
+                h.initial_profile(self.store, self.one, options)
+
+    def test_stale_exhausted_source_does_not_silently_launch_or_authorize_a_switch(self):
+        options, _ = h.managed_args("codex", [])
+        self.save(self.one, 100, observed=time.time() - 301)
+        with patch.object(app, "identity"), patch.object(app, "refresh"):
+            with self.assertRaisesRegex(app.UserError, "last seen exhausted"):
+                h.initial_profile(self.store, self.one, options)
+
+    def test_missing_usage_does_not_erase_exhaustion_but_new_identity_does(self):
+        options, _ = h.managed_args("codex", [])
+        self.save(self.one, 100)
+        self.store.save(self.one, [], "claude-statusline", error="No subscription quota")
+        with patch.object(app, "identity"), patch.object(app, "refresh"):
+            with self.assertRaisesRegex(app.UserError, "last seen exhausted"):
+                h.initial_profile(self.store, self.one, options)
+            self.store.save(self.one, [], "configuration", error="Account email changed")
+            self.assertFalse(h.last_known_exhausted(self.store, self.one))
+            self.assertEqual(h.initial_profile(self.store, self.one, options)[0], self.one)
+
+    def test_new_healthy_usage_or_elapsed_reset_clears_known_exhaustion(self):
+        self.save(self.one, 100)
+        self.save(self.one, 10)
+        self.assertFalse(h.last_known_exhausted(self.store, self.one))
+        self.store.save(self.one, [app.window("week", 100, time.time() - 1, 10080)], "fixture")
+        self.assertFalse(h.last_known_exhausted(self.store, self.one))
+
     def test_cross_provider_auth_failure_keeps_outgoing_agent(self):
         self.cross_fallback()
         def identity(store, profile):
@@ -276,6 +340,8 @@ class HandoffTests(unittest.TestCase):
         self.ready()
         self.event("StopFailure", error="rate_limit")
         self.assertIsNone(h.claim_handoff(self.store, self.run))
+        self.assertEqual(self.run.read()["status"], "rate limited; no safe checkpoint")
+        self.assertIn("No task checkpoint was saved", self.run.read()["recovery_note"])
 
     def test_expired_lease_and_disabled_policy_prevent_switch(self):
         self.ready()
@@ -302,6 +368,37 @@ class HandoffTests(unittest.TestCase):
             state["fault"] = None
         self.event("Stop", permission_mode="plan", last_assistant_message=self.checkpoint())
         self.assertIn("permissions changed", self.run.read()["fault"])
+
+    def test_claude_supported_mode_changes_are_preserved_without_bypassing_permissions(self):
+        profile = self.profile("claude1", "claude")
+        for mode in ("auto", "plan", "acceptEdits", "dontAsk", "manual", "default"):
+            with self.subTest(mode=mode):
+                self.attempt = self.run.begin(profile)
+                self.event("SessionStart", permission_mode="default")
+                with self.run.edit() as state:
+                    state["ready_until"] = time.time() + 20
+                    state["checkpoint"] = {"summary": "Previous mode"}
+                self.event("UserPromptSubmit", permission_mode=mode, prompt="Continue the task")
+                state = self.run.read()
+                self.assertIsNone(state["fault"])
+                self.assertEqual(state["ready_until"], 0)
+                self.assertIsNone(state["checkpoint"])
+                expected = "manual" if mode == "default" else mode
+                self.assertEqual(h.replacement_launch(state, profile)["options"], ["--permission-mode", expected])
+        self.event("UserPromptSubmit", permission_mode="bypassPermissions", prompt="Continue")
+        self.assertIn("Unsupported Claude permission mode", self.run.read()["fault"])
+        self.assertNotIn("bypassPermissions", self.run.read()["launch_options"])
+
+    def test_claude_mode_change_revokes_stop_lease_before_claim(self):
+        profile = self.profile("claude1", "claude")
+        self.attempt = self.run.begin(profile)
+        self.event("SessionStart", permission_mode="default")
+        with self.run.edit() as state:
+            state["ready_until"] = time.time() + 20
+            state["checkpoint"] = {"summary": "Previous mode"}
+        self.event("SubagentStop", agent_id="completed", permission_mode="auto")
+        self.assertEqual(self.run.read()["ready_until"], 0)
+        self.assertIsNone(self.run.read()["checkpoint"])
 
     def test_old_hooks_and_old_monitor_cannot_modify_replacement(self):
         old = self.attempt
@@ -481,7 +578,39 @@ class HandoffTests(unittest.TestCase):
         self.cross_fallback()
         self.exercise_supervisor(cross=True, stale_on_exit=True)
 
+    def test_supervisor_starts_healthy_claude_without_launching_exhausted_account(self):
+        current = self.profile("current", "claude")
+        standby = self.profile("midwest", "claude")
+        self.save(current, 100)
+        self.save(standby, 1)
+        fake = self.cwd / "claude"
+        fake.write_text("#!" + sys.executable + "\n" + '''
+import json, os, pathlib, sys
+root = pathlib.Path.cwd()
+assert os.environ['AI_SUB_PROFILE'] == 'claude/midwest'
+assert sys.argv[-1] == 'Finish the authorized Foreman work'
+assert sys.argv[sys.argv.index('--permission-mode') + 1] == 'auto'
+state = json.loads((pathlib.Path(os.environ['AI_SUB_RUN_DIR']) / 'run.json').read_text())
+assert state['startup_route'] == {'from_profile': 'claude/current', 'to_profile': 'claude/midwest'}
+assert state['prompts'] == ['Finish the authorized Foreman work']
+assert state.get('handoff_path') is None
+(root / 'started-profile.txt').write_text(os.environ['AI_SUB_PROFILE'])
+''')
+        fake.chmod(0o700)
+        with patch.object(app, "binary", return_value=str(fake)), patch.object(app, "identity"), \
+                patch.object(app, "refresh"), patch.object(h, "monitor"), \
+                patch.object(h.Path, "cwd", return_value=self.cwd), \
+                patch.object(sys.stdin, "isatty", return_value=True), \
+                patch.object(sys.stdout, "isatty", return_value=True), \
+                patch.object(h.termios, "tcgetattr", return_value=[]), patch.object(h.termios, "tcsetattr"), \
+                contextlib.redirect_stderr(io.StringIO()):
+            result = h.supervise(self.store, current, ["--permission-mode", "auto", "Finish the authorized Foreman work"])
+        self.assertEqual(result, 0)
+        self.assertEqual((self.cwd / "started-profile.txt").read_text(), "claude/midwest")
+
     def exercise_supervisor(self, cross=False, stale_on_exit=False, **checkpoint_options):
+        # This fixture exercises a limit reached during work, after startup routing.
+        self.save(self.one, 10)
         fake = self.cwd / "fake-cli"
         fake.write_text("#!" + sys.executable + "\n" + '''
 import json, os, pathlib, signal, subprocess, sys, time
@@ -548,6 +677,8 @@ else:
             (self.cwd / provider).symlink_to(fake)
 
         def fast_monitor(store, run, profile, stopped, attempt):
+            if app.profile_key(profile) == app.profile_key(self.one):
+                self.save(self.one, 91)
             while not stopped.is_set():
                 h.poll_quota(store, run, profile, attempt)
                 stopped.wait(.02)

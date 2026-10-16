@@ -67,6 +67,17 @@ actual repository/worktree. `ai-sub auto status` shows policy, and `ai-sub sessi
 shows managed runs and checkpoint paths. `ai-sub auto off [PROVIDER]` disables it.
 Read [references/handoff.md](references/handoff.md) for setup and supported modes.
 
+New managed launches check capacity before starting a CLI and choose a verified,
+fresh standby when the selected account is already at its threshold. A known
+full window is not cleared by an empty or stale update. Do not tell a user that
+an exhausted active session has switched just because another managed run is
+healthy: match the run's profile, directory, faults and checkpoint state.
+Claude-to-Claude handoffs preserve native manual/plan/acceptEdits/auto/dontAsk
+mode changes. Unsupported modes and Codex permission changes suspend switching.
+If a rate-limited turn could not save a checkpoint, exit that CLI before starting
+an available profile in the same worktree; files persist, full conversation
+memory does not. Commands must be entered at the shell, not as Claude chat text.
+
 A managed session requests a checkpoint when fresh quota reaches its threshold
 and another verified account has fresh, complete capacity. Same-provider accounts
 are preferred. To allow Codex → Claude, explicitly configure
