@@ -287,13 +287,14 @@ class InstallerTests(unittest.TestCase):
             fake_home = temp / "coworker-home"
             state = temp / "private-state"
             with patch.object(Path, "home", return_value=fake_home), \
-                 patch.dict(os.environ, {"AI_SUB_HOME": str(state)}), \
+                 patch.dict(os.environ, {"AI_SUB_HOME": str(state), "SHELL": "/bin/zsh", "ZDOTDIR": str(fake_home)}), \
                  contextlib.redirect_stdout(io.StringIO()):
                 with patch.object(sys, "argv", [str(checkout / "install.py")]):
                     installer.main()
                     installer.main()
                 for target, destination in installer.links():
                     self.assertEqual(target.resolve(), destination.resolve())
+                self.assertEqual((fake_home / ".zshrc").read_text().count("# >>> ai-subscriptions native shell >>>"), 1)
                 result = app.subprocess.run([str(fake_home / ".local/bin/ai-sub"), "doctor"],
                                             capture_output=True, text=True, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
@@ -302,6 +303,7 @@ class InstallerTests(unittest.TestCase):
                     installer.main()
                 self.assertTrue(state.exists())
                 self.assertTrue(all(not target.is_symlink() for target, _ in installer.links()))
+                self.assertFalse((fake_home / ".zshrc").exists())
 
     def test_installed_sampler_runs_before_usage_expires(self):
         import plistlib

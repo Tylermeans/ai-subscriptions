@@ -1,4 +1,4 @@
-# Optional shell integration for zsh and bash. Source in your interactive shell.
+# Shell integration for zsh and bash. The installer loads this in new terminals.
 # Functions do not affect Foreman workers or the binaries used by ai-sub itself.
 if [ -n "${ZSH_VERSION:-}" ]; then
   _ai_sub_native_source="${(%):-%N}"

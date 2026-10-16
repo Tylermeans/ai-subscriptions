@@ -31,7 +31,7 @@ Run these commands in your **regular terminal**, outside an agent's shell tool:
 git clone https://github.com/tylermeans/ai-subscriptions.git
 cd ai-subscriptions
 python3 install.py --background
-source ./activate.zsh
+source ./native.zsh # only for this already-open terminal
 ai-sub list
 ai-sub doctor
 ```
@@ -54,10 +54,18 @@ profile was registered, follow [Add another account](#add-another-account).
 from sessions launched through `ai-sub run`; the background sampler does not
 query idle Claude accounts. **Installing the sampler does not enable switching.**
 
-For a new terminal, source this checkout's `activate.zsh` again. To persist the
-PATH change, add `source /absolute/path/to/ai-subscriptions/activate.zsh` to your
-`~/.zshrc`. Replace the path with your actual checkout. The script supports bash
-and zsh. Keep the checkout in the same location after installing it.
+**Setup is once per machine.** The installer configures your shell so new
+terminals automatically route interactive `claude` and `codex` commands through
+ai-sub. You do not need to type `ai-sub run` or source a file in each new terminal.
+Already-open shells need the one-time `source ./native.zsh` above, or you can
+close them and open new terminals. Keep the checkout in the same location.
+
+For zsh, the installer adds a marked block to `~/.zshrc` (respecting `ZDOTDIR`).
+For bash, it uses `~/.bashrc` and the active login profile. Existing content and
+symlinks are preserved; changed files get a private `.ai-sub-backup-*` backup.
+Repeated installs do not add duplicate blocks. `--shell zsh` or `--shell bash`
+overrides shell detection. `--no-native` skips this setup for people who prefer
+explicit `ai-sub run` commands; project-only installation also skips it.
 
 The installer links `~/.local/bin/ai-sub` and the skill under `~/.agents`,
 `~/.codex` and `~/.claude`. Existing unrelated files are not overwritten. Restart
@@ -202,11 +210,17 @@ Account names are optional: `ai-sub run claude` uses your selected Claude
 profile. `ai-sub run claude work` chooses `work` for that launch. Neither command
 logs you out of another profile. Each profile keeps its own official CLI login.
 
-To make the familiar terminal commands start through ai-sub, source this file
-in your **regular zsh or bash shell**:
+The default installation makes the familiar terminal commands start through
+ai-sub. To upgrade an existing installation, run this **once per machine** in
+your regular terminal:
 
 ```sh
-source /absolute/path/to/ai-subscriptions/native.zsh
+python3 /absolute/path/to/ai-subscriptions/install.py
+```
+
+Open a new terminal. The commands are ready automatically:
+
+```sh
 ai-sub use claude work          # choose a saved account; does not log in/out
 ai-sub auto on claude           # enable automatic handoffs
 claude                         # same as ai-sub run claude
@@ -214,11 +228,18 @@ claude --permission-mode auto  # preserve Claude's native Auto mode
 codex                          # same as ai-sub run codex
 ```
 
-Replace `work` with a label from `ai-sub list`. To enable this in new terminals,
-add the `source .../native.zsh` line to `~/.zshrc` (or `~/.bashrc`). Source it in
-each already-open terminal where you want these commands managed. The script
-also sets up PATH, so it replaces the need to source `activate.zsh` separately.
-It refuses to overwrite existing `claude`/`codex` aliases or functions.
+Replace `work` with a label from `ai-sub list`. The selected account and automatic
+handoff policy persist; those two setup commands are not needed every session.
+To activate an already-open terminal immediately, source the checkout's
+`native.zsh` once. It also sets up PATH. Existing `claude`/`codex` aliases or
+functions produce a visible conflict message and are not overwritten.
+
+On another Mac, clone this repository and run the same installer under the macOS
+user who will run the CLI. Sign in to each account once on that machine and
+enable its automatic policy with `ai-sub auto on claude` (or both providers with
+`ai-sub auto on`). Account logins and usage stay on each machine; no credentials
+are transferred from another Mac. The official CLI binaries remain available to
+their normal updaters.
 
 These are shell functions invoking the installed official CLIs. They do not
 replace binaries or hot-swap credentials inside a running CLI. Automatic moves
@@ -233,7 +254,9 @@ workers and native editor extensions are not intercepted. Those calls use
 their own native account configuration, not the ai-sub selected profile.
 `command claude` or `command codex` explicitly bypasses these shell functions.
 To disable them in the current shell, run `unset -f claude codex` followed by
-`unset _AI_SUB_NATIVE_ENABLED`; remove the source line to disable future shells.
+`unset _AI_SUB_NATIVE_ENABLED`. `python3 install.py --uninstall` removes the
+installer's startup blocks and links while preserving account data and unrelated
+shell edits. An edited or different checkout's block is left intact with an error.
 
 ## Add another account
 
@@ -451,7 +474,7 @@ may contain confidential project context; do not put secrets in them.
 | --- | --- |
 | `ai-sub: command not found` | Run `source /absolute/path/to/ai-subscriptions/activate.zsh` in that terminal. |
 | `ai-sub run claude` selects the wrong account | Run `ai-sub list`, then `ai-sub use claude NAME` to choose the default. A known exhausted default can be skipped at startup only when another verified profile has complete quota less than five minutes old. |
-| Plain `claude` does not use ai-sub | Source `native.zsh` in that shell and check `type claude` reports a function. Existing sessions cannot be adopted. |
+| Plain `claude` does not use ai-sub | Run `python3 install.py` once and open a new terminal. Check `type claude` reports a function. Existing sessions cannot be adopted. |
 | `/ai-subscriptions` is missing in Claude | Run the installer, then restart Claude so it discovers the skill. |
 | No bottom-right indicator | Run `python3 install.py --vscode`, reload VS Code, and ensure its status bar is visible. Check that AI Subscription Usage is enabled. |
 | Indicator says usage unavailable | Set the absolute `aiSubscriptions.executablePath` in VS Code User settings; check Python and run `ai-sub doctor` in a regular terminal. |

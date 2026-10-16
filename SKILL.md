@@ -24,9 +24,11 @@ beside this file unless `AI_SUB_HOME` overrides it.
    `ai-sub run PROVIDER` session then uses that profile. A specific launch can use
    `ai-sub run PROVIDER NAME -- CLI_ARGUMENTS`.
 
-For ordinary interactive `claude` / `codex` commands, the user can source the
-checkout's `native.zsh` in their regular zsh/bash terminal. It routes those starts
-through `ai-sub run` with the selected profile; see [shell setup](README.md#use-plain-claude-or-codex).
+The global installer configures zsh/bash so new terminals route ordinary
+interactive `claude` / `codex` commands through `ai-sub run` with the selected
+profile. Setup is once per machine; already-open shells can source `native.zsh`
+once or open a new terminal. `--no-native` and `--project` skip persistence.
+See [shell setup](README.md#use-plain-claude-or-codex).
 Headless workers, native administration and editor extensions retain their own
 launch configuration. `command claude` / `command codex` bypass these functions.
 

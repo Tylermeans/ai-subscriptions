@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install local symlinks and optionally a per-user macOS quota sampler."""
+"""Install persistent terminal integration, local skills and optional usage tools."""
 import argparse
 import os
 from pathlib import Path
@@ -91,14 +91,21 @@ def main():
     parser.add_argument("--background", action="store_true")
     parser.add_argument("--uninstall", action="store_true")
     parser.add_argument("--vscode", action="store_true", help="Also install/remove the VS Code usage indicator")
+    parser.add_argument("--no-native", action="store_true", help="Skip persistent claude/codex shell setup")
+    parser.add_argument("--shell", choices=("zsh", "bash"), help="Shell to configure (default: your SHELL)")
     args = parser.parse_args()
     if args.project and args.background:
         raise UserError("Background installation needs user-level paths; omit --project in a normal terminal.")
+    if args.shell and (args.project or args.no_native):
+        raise UserError("Use --shell for user-level native setup, without --project or --no-native.")
+    from shell_setup import configure as configure_shell, targets as shell_targets
+    native_paths = shell_targets(args.shell) if not (args.project or args.no_native or args.uninstall) else None
     entries = links(args.project)
     if args.uninstall:
         if args.vscode:
             vscode_extension(uninstall=True)
         if not args.project:
+            configure_shell(Store(), ROOT, uninstall=True)
             background(Store(), uninstall=True)
         for target, source in entries:
             if target.is_symlink() and target.resolve() == source.resolve():
@@ -115,11 +122,15 @@ def main():
         if f"{provider}/current" not in config["profiles"] and (Path.home() / f".{provider}").is_dir():
             store.add(provider, "current", current=True)
             print(f"Registered existing {provider} configuration as current; no credentials copied.")
+    if native_paths is not None:
+        configure_shell(store, ROOT, native_paths)
+        print("New terminals will use ai-sub automatically when you type claude or codex.")
     if args.background:
         background(store)
     if args.vscode:
         vscode_extension()
-    print("For this terminal: source " + shlex.quote(str(ROOT / "activate.zsh")))
+    activation = "native.zsh" if native_paths is not None else "activate.zsh"
+    print("For this already-open terminal only: source " + shlex.quote(str(ROOT / activation)))
 
 
 if __name__ == "__main__":
