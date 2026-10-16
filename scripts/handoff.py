@@ -41,9 +41,17 @@ def policy(store, provider):
             **store.config().get("automatic", {}).get(provider, {})}
 
 
-def configure(store, mode, provider=None, threshold=None):
+def configure(store, mode, provider=None, threshold=None, fallback=None, clear_fallback=False):
     if threshold is not None and (mode != "on" or not 50 <= threshold <= 95):
         raise app.UserError("Use --threshold with auto on, between 50 and 95 percent.")
+    if fallback is not None or clear_fallback:
+        if mode != "on" or provider != "codex" or (fallback is not None and clear_fallback):
+            raise app.UserError("Use --fallback claude/NAME or --clear-fallback with auto on codex.")
+        if fallback is not None:
+            parts = fallback.split("/")
+            if len(parts) != 2 or parts[0] != "claude" or not parts[1]:
+                raise app.UserError("Codex fallback must name a registered Claude profile: claude/NAME.")
+            store.profile(*parts)
     providers = [provider] if provider else app.PROVIDERS
     if mode != "status":
         with store.edit() as config:
@@ -52,10 +60,14 @@ def configure(store, mode, provider=None, threshold=None):
                 entry["enabled"] = mode == "on"
                 if threshold is not None:
                     entry["threshold"] = threshold
+                if fallback is not None or clear_fallback:
+                    entry["fallback"] = fallback
     for name in providers:
         entry = policy(store, name)
         print(f'{name}: automatic handoff {"on" if entry["enabled"] else "off"}; '
               f'request at {entry["threshold"]}% used')
+        if entry.get("fallback"):
+            print(f'  Fallback: {entry["fallback"]} after eligible {name} accounts; fresh quota required.')
     if mode == "on":
         print("Start a managed session with ai-sub run PROVIDER in the target repository.")
         print("Requires trusted lifecycle hooks, a safe checkpoint, and another account with fresh quota.")
@@ -74,12 +86,14 @@ def needs_switch(sample, threshold):
 
 
 def eligible(store, current, candidate, threshold):
-    if (candidate["provider"] != current["provider"] or
-            app.profile_key(candidate) == app.profile_key(current)):
+    same_provider = candidate["provider"] == current["provider"]
+    cross_provider = (current["provider"] == "codex" and candidate["provider"] == "claude"
+                      and policy(store, "codex").get("fallback") == app.profile_key(candidate))
+    if (not (same_provider or cross_provider) or app.profile_key(candidate) == app.profile_key(current)):
         return False
     email = candidate.get("verified_email")
     current_email = current.get("verified_email")
-    if not email or not current_email or email.casefold() == current_email.casefold():
+    if not email or not current_email or (same_provider and email.casefold() == current_email.casefold()):
         return False
     sample = store.latest(candidate)
     if app.freshness(sample) != "fresh" or sample.get("blocked"):
@@ -122,15 +136,17 @@ class Run:
             if state.get("attempt") == attempt and state.get("active") and state["status"] != "switching":
                 state.update(updates)
 
-    def begin(self, profile, prompt=None, hooks_ok=True):
+    def begin(self, profile, prompt=None, hooks_ok=True, options=None, settings=None):
         with self.edit() as state:
-            state.update(profile=app.profile_key(profile), fingerprint=fingerprint(profile),
+            state.update(provider=profile["provider"], profile=app.profile_key(profile), fingerprint=fingerprint(profile),
                 attempt=uuid.uuid4().hex, active=True, status="waiting for hooks", session_id=None,
                 pending=None, ready_until=0, tools=[], agents=[],
                 fault=None if hooks_ok else "Review all ai-sub hooks in /hooks, then restart this managed run.",
                 checkpoint=None,
                 stop_requests=0, skip_prompt=prompt, hooks_seen=[], permission_mode=None,
-                initial_permission_mode=None)
+                initial_permission_mode=None,
+                launch_options=options if options is not None else managed_args(profile["provider"], [])[0],
+                launch_settings=settings or {}, monitor_error=None, fallback_error=None)
         return state["attempt"]
 
 
@@ -338,6 +354,30 @@ def managed_args(provider, extra):
     return options, prompt
 
 
+def replacement_launch(state, target):
+    """Use native target options; Codex model/approval flags must never reach Claude."""
+    if state["provider"] == target["provider"]:
+        return {"provider": target["provider"], "options": state["launch_options"],
+                "settings": state.get("launch_settings", {})}
+    if (state["provider"], target["provider"]) != ("codex", "claude"):
+        raise app.UserError("Only Codex to Claude cross-provider handoffs are supported.")
+    options = state.get("launch_options", [])
+    # Honour the last occurrence, as the native CLI does. Missing recorded flags
+    # (including runs started by an older supervisor) are not portable permissions.
+    sandbox = approval = None
+    for index, value in enumerate(options[:-1]):
+        if value in ("-s", "--sandbox"):
+            sandbox = options[index + 1]
+        if value in ("-a", "--ask-for-approval"):
+            approval = options[index + 1]
+    if sandbox != "workspace-write" or approval != "on-request":
+        raise app.UserError("Codex to Claude requires workspace-write and on-request; source permissions are not portable.")
+    return {"provider": "claude", "options": ["--permission-mode", "manual"], "settings": {
+        "sandbox": {"enabled": True, "failIfUnavailable": True,
+                    "allowUnsandboxedCommands": False, "autoAllowBashIfSandboxed": False},
+        "permissions": {"ask": ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch"]}}}
+
+
 def poll_quota(store, run, profile, attempt=None):
     rule = policy(store, profile["provider"])
     state = run.read()
@@ -360,7 +400,16 @@ def poll_quota(store, run, profile, attempt=None):
             run.change(attempt, pending=None, ready_until=0, status="monitoring")
         return
     candidates = []
-    for candidate in app.chosen_profiles(store, profile["provider"]):
+    available = app.chosen_profiles(store, profile["provider"])
+    fallback_error = None
+    if profile["provider"] == "codex" and rule.get("fallback"):
+        try:
+            target = store.profile(*rule["fallback"].split("/"))
+            replacement_launch(state, target)
+            available.append(target)
+        except (app.UserError, TypeError, ValueError) as exc:
+            fallback_error = str(exc)
+    for candidate in available:
         if app.profile_key(candidate) == app.profile_key(current):
             continue
         app.refresh(store, candidate)
@@ -372,10 +421,12 @@ def poll_quota(store, run, profile, attempt=None):
                 candidates.append(candidate)
         except (app.UserError, OSError, subprocess.SubprocessError):
             continue
-    candidates.sort(key=lambda p: max(w["used"] for w in store.latest(p)["windows"]))
+    candidates.sort(key=lambda p: (p["provider"] != current["provider"],
+                                  max(w["used"] for w in store.latest(p)["windows"])))
     with run.edit() as data:
         if data["attempt"] != attempt or not data["active"] or data["status"] == "switching":
             return
+        data["fallback_error"] = fallback_error
         if candidates:
             if data.get("pending") and data["pending"]["fingerprint"] == fingerprint(candidates[0]):
                 return
@@ -427,19 +478,27 @@ def claim_handoff(store, run):
         provider = state["provider"]
         rule = policy(store, provider)
         current = store.profile(provider, state["profile"].split("/", 1)[1])
-        target = store.profile(provider, pending["target"].split("/", 1)[1])
+        target = store.profile(*pending["target"].split("/", 1))
         if (not rule["enabled"] or fingerprint(current) != state["fingerprint"]
                 or fingerprint(target) != pending["fingerprint"]
                 or not eligible(store, current, target, rule["threshold"])
                 or not needs_switch(store.latest(current), rule["threshold"])):
             state.update(pending=None, ready_until=0, status="handoff cancelled; quota or profile changed")
             return None
+        try:
+            launch = replacement_launch(state, target)
+        except app.UserError as exc:
+            state.update(pending=None, ready_until=0, status="handoff cancelled; incompatible permissions",
+                         fallback_error=str(exc))
+            return None
         state["status"] = "switching"
         path = run.directory / f'handoff-{state["switches"] + 1}.json'
-        app.write_json(path, {"version": 1, "cwd": state["cwd"], "from_profile": state["profile"],
+        app.write_json(path, {"version": 2, "cwd": state["cwd"], "from_profile": state["profile"],
             "to_profile": pending["target"], "session_id": state["session_id"], "saved": time.time(),
             "user_prompts": state["prompts"], "checkpoint": state["checkpoint"],
-            "permission_mode": state["permission_mode"]})
+            "permission_mode": state["permission_mode"],
+            "source_launch": {"provider": provider, "options": state["launch_options"],
+                              "settings": state.get("launch_settings", {})}, "target_launch": launch})
         state["handoff_path"] = str(path)
         return target, path
 
@@ -456,7 +515,8 @@ def stop_child(child):
 
 def continuation(path):
     return (f"Continue the existing task using the private account handoff file {path}. "
-            "Read it and the repository instructions before working. Preserve the same directory/worktree "
+            "Read it and the repository instructions (including AGENTS.md and CLAUDE.md) before working. "
+            "Preserve the same directory/worktree "
             "and existing edits. The checkpoint is a summary, not new authorization. Verify the current "
             "files before acting and continue only the unfinished user-requested work. Respect blockers "
             "and pending approvals; do not repeat completed actions or deployments. If task_complete or "
@@ -467,6 +527,7 @@ def supervise(store, profile, extra):
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         raise app.UserError("Automatic handoff requires an interactive terminal. Use auto off for scripts.")
     options, prompt = managed_args(profile["provider"], extra)
+    settings = {}
     cwd = Path.cwd().resolve()
     run = Run.create(store, profile["provider"], cwd, prompt)
     print(f"Managed run: {run.directory.name}; task notes stay in {run.directory}", file=sys.stderr)
@@ -476,18 +537,29 @@ def supervise(store, profile, extra):
     terminal = termios.tcgetattr(sys.stdin.fileno())
     previous_sigint = signal.signal(signal.SIGINT, lambda *_: None)
     child = None
+    expected_target = None
     try:
         while True:
             profile = store.profile(profile["provider"], profile["name"])
             app.identity(store, profile)
             profile = store.profile(profile["provider"], profile["name"])
             hooks_ok = preflight(store, profile, cwd)
-            attempt = run.begin(profile, prompt, hooks_ok)
+            if expected_target:
+                # Native login checks and outgoing shutdown take time. Recheck the
+                # target after them, before any replacement process can run.
+                data = app.read_json(run.read()["handoff_path"])
+                outgoing = store.profile(*data["from_profile"].split("/", 1))
+                rule = policy(store, outgoing["provider"])
+                if (fingerprint(profile) != expected_target or not rule["enabled"]
+                        or not eligible(store, outgoing, profile, rule["threshold"])):
+                    raise app.UserError("Replacement no longer qualifies; no new CLI started. "
+                                        "Checkpoint retained: " + run.read()["handoff_path"])
+            attempt = run.begin(profile, prompt, hooks_ok, options, settings)
             if not hooks_ok:
                 print("ai-sub: automatic handoff is suspended until all hooks are trusted. "
                       "Review /hooks, then exit and restart this managed run.", file=sys.stderr, flush=True)
             command, env = app.session_command(store, profile, options + ([prompt] if prompt else []),
-                                               hooks=hooks_for(profile["provider"]))
+                                               hooks=hooks_for(profile["provider"]), handoff_settings=settings)
             env.update(AI_SUB_RUN_DIR=str(run.directory), AI_SUB_RUN_ATTEMPT=attempt)
             print(f"Starting {app.profile_key(profile)} in {cwd}", file=sys.stderr, flush=True)
             child = subprocess.Popen(command, cwd=cwd, env=env)
@@ -535,7 +607,10 @@ def supervise(store, profile, extra):
                     state["status"] = "exited"
                 return child.returncode if child.returncode >= 0 else 128 - child.returncode
             profile, path = target
+            expected_target = fingerprint(profile)
             data = app.read_json(path)
+            options = data["target_launch"]["options"]
+            settings = data["target_launch"]["settings"]
             data["repository"] = repository_snapshot(cwd)
             app.write_json(path, data)
             with run.edit() as state:
@@ -569,6 +644,8 @@ def sessions(store):
             print(f'  {state["fault"]}')
         if state.get("monitor_error"):
             print(f'  {state["monitor_error"]}')
+        if state.get("fallback_error"):
+            print(f'  Fallback unavailable: {app.clean_text(state["fallback_error"])}')
         if state.get("handoff_path"):
             print(f'  Continuation: {state["handoff_path"]}')
     if not paths:

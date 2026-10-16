@@ -67,6 +67,125 @@ class HandoffTests(unittest.TestCase):
         self.request()
         return self.event("Stop", last_assistant_message=self.checkpoint())
 
+    def cross_fallback(self):
+        claude = self.profile("two", "claude")
+        self.save(claude, 10)
+        self.save(self.two, 91)
+        with contextlib.redirect_stdout(io.StringIO()):
+            h.configure(self.store, "on", "codex", fallback="claude/two")
+        return claude
+
+    def test_fallback_requires_explicit_codex_to_registered_claude_policy(self):
+        self.profile("two", "claude")
+        original = self.store.config()
+        for mode, provider, fallback in (("on", None, "claude/two"), ("off", "codex", "claude/two"),
+                ("on", "claude", "codex/two"), ("on", "codex", "codex/two"),
+                ("on", "codex", "claude/missing"), ("on", "codex", "claude/")):
+            with self.subTest(mode=mode, provider=provider, fallback=fallback), self.assertRaises(app.UserError):
+                h.configure(self.store, mode, provider, fallback=fallback)
+            self.assertEqual(self.store.config(), original)
+        args = app.parser().parse_args(["auto", "on", "codex", "--fallback", "claude/two"])
+        self.assertEqual(args.fallback, "claude/two")
+
+    def test_fallback_prefers_codex_then_only_the_named_claude_profile(self):
+        target = self.cross_fallback()
+        other = self.profile("unused", "claude")
+        self.save(other, 1)
+        self.save(self.two, 20)
+        self.request()
+        self.assertEqual(self.run.read()["pending"]["target"], "codex/two")
+        self.save(self.two, 91)
+        self.request()
+        self.assertEqual(self.run.read()["pending"]["target"], "claude/two")
+        self.assertFalse(h.eligible(self.store, self.one, other, 90))
+        self.assertTrue(h.eligible(self.store, self.one, {**target, "verified_email": self.one["email"]}, 90))
+        self.assertFalse(h.eligible(self.store, target, self.one, 90))
+
+    def test_fallback_requires_fresh_complete_unblocked_quota_below_threshold(self):
+        target = self.cross_fallback()
+        samples = [
+            (10, time.time() - 301, False), (90, time.time(), False), (1, time.time(), True)]
+        for used, observed, blocked in samples:
+            with self.subTest(used=used, observed=observed, blocked=blocked):
+                self.save(target, used, observed=observed, blocked=blocked)
+                self.request()
+                self.assertIsNone(self.run.read()["pending"])
+        self.store.save(target, [app.window("week", 1, time.time() + 3600, 10080)], "fixture")
+        self.request()
+        self.assertIsNone(self.run.read()["pending"])
+
+    def test_weekly_only_source_can_request_claude_fallback(self):
+        self.cross_fallback()
+        self.store.save(self.one, [app.window("week", 91, time.time() + 3600, 10080)], "fixture")
+        self.request()
+        self.assertEqual(self.run.read()["pending"]["target"], "claude/two")
+
+    def test_cross_provider_auth_failure_keeps_outgoing_agent(self):
+        self.cross_fallback()
+        def identity(store, profile):
+            if profile["provider"] == "claude":
+                raise app.UserError("Sign in required")
+        with patch.object(app, "refresh"), patch.object(app, "identity", side_effect=identity):
+            h.poll_quota(self.store, self.run, self.one)
+        self.assertIsNone(self.run.read()["pending"])
+        self.assertIsNone(h.claim_handoff(self.store, self.run))
+
+    def test_removing_fallback_after_checkpoint_cancels_cross_provider_switch(self):
+        self.cross_fallback()
+        self.ready()
+        with contextlib.redirect_stdout(io.StringIO()):
+            h.configure(self.store, "on", "codex", clear_fallback=True)
+        self.assertIsNone(h.claim_handoff(self.store, self.run))
+        self.assertIsNone(h.policy(self.store, "codex")["fallback"])
+
+    def test_cross_provider_source_permissions_must_be_portable(self):
+        target = self.cross_fallback()
+        for extra in (["-s", "read-only"], ["-a", "never"], ["-a", "untrusted"],
+                      ["--sandbox", "workspace-write", "-s", "read-only"]):
+            with self.subTest(extra=extra):
+                options, _ = h.managed_args("codex", extra)
+                self.attempt = self.run.begin(self.one, options=options)
+                self.event("SessionStart", source="startup")
+                self.request()
+                self.assertIsNone(self.run.read()["pending"])
+                self.assertIn("source permissions are not portable", self.run.read()["fallback_error"])
+        with self.run.edit() as state:
+            state.pop("launch_options")  # A run started by an older installed supervisor.
+        with self.assertRaises(app.UserError):
+            h.replacement_launch(self.run.read(), target)
+
+    def test_cross_checkpoint_records_both_native_launches(self):
+        self.cross_fallback()
+        options, _ = h.managed_args("codex", ["--model", "codex-model", "--search"])
+        self.attempt = self.run.begin(self.one, options=options)
+        self.event("SessionStart", source="startup")
+        self.ready()
+        target, path = h.claim_handoff(self.store, self.run)
+        saved = app.read_json(path)
+        self.assertEqual(saved["version"], 2)
+        self.assertEqual(saved["from_profile"], "codex/one")
+        self.assertEqual(saved["to_profile"], "claude/two")
+        self.assertEqual(saved["source_launch"]["options"], options)
+        self.assertEqual(saved["target_launch"]["options"], ["--permission-mode", "manual"])
+        self.assertEqual(saved["target_launch"]["provider"], "claude")
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_cross_provider_run_rebinds_hooks_and_background_checks(self):
+        target = self.cross_fallback()
+        old_attempt = self.attempt
+        self.attempt = self.run.begin(target)
+        self.event("SessionStart", source="startup")
+        before = self.run.read()
+        self.assertEqual(before["provider"], "claude")
+        h.hook_event(self.run, {"hook_event_name": "Interrupt", "session_id": "main-session"}, old_attempt)
+        self.assertEqual(self.run.read(), before)
+        with self.run.edit() as state:
+            state["pending"] = {"target": "claude/another"}
+        _, hold = self.event("Stop", last_assistant_message=self.checkpoint())
+        self.assertFalse(hold, "Claude must report empty background_tasks and session_crons")
+        _, hold = self.event("Stop", last_assistant_message=self.checkpoint(), background_tasks=[], session_crons=[])
+        self.assertTrue(hold)
+
     def test_requires_threshold_and_distinct_same_provider_account(self):
         self.save(self.one, 89)
         self.request()
@@ -334,13 +453,30 @@ class HandoffTests(unittest.TestCase):
         self.save(self.two, 10)
         self.exercise_supervisor()
 
-    def exercise_supervisor(self, **checkpoint_options):
+    def test_supervisor_moves_codex_to_claude_with_native_options_and_preserved_edits(self):
+        self.cross_fallback()
+        self.exercise_supervisor(cross=True)
+
+    def test_cross_provider_completed_task_starts_idle(self):
+        self.cross_fallback()
+        self.exercise_supervisor(cross=True, task_complete=True)
+
+    def test_cross_provider_waiting_for_user_starts_idle(self):
+        self.cross_fallback()
+        self.exercise_supervisor(cross=True, waiting_for_user=True)
+
+    def test_target_becomes_stale_during_exit_does_not_launch_claude(self):
+        self.cross_fallback()
+        self.exercise_supervisor(cross=True, stale_on_exit=True)
+
+    def exercise_supervisor(self, cross=False, stale_on_exit=False, **checkpoint_options):
         fake = self.cwd / "fake-cli"
         fake.write_text("#!" + sys.executable + "\n" + '''
 import json, os, pathlib, signal, subprocess, sys, time
 root = pathlib.Path.cwd()
 state_path = pathlib.Path(os.environ["AI_SUB_RUN_DIR"]) / "run.json"
 def state(): return json.loads(state_path.read_text())
+assert pathlib.Path(sys.argv[0]).name == state()["provider"]
 def record(text):
     with (root / "order.txt").open("a") as f: f.write(text + "\\n")
 def hook(event, **extra):
@@ -375,20 +511,41 @@ else:
     assert saved["user_prompts"] == ["Fix bug without deploying"]
     assert "Fix bug without deploying" not in sys.argv
     assert any("Continue the existing task" in arg for arg in sys.argv) == SHOULD_CONTINUE
+    assert saved["to_profile"] == os.environ["AI_SUB_PROFILE"]
+    if saved["from_profile"].startswith("codex/") and state()["provider"] == "claude":
+        assert not any(a in sys.argv for a in ("--sandbox", "--ask-for-approval", "--no-daemon", "--model", "--search"))
+        assert sys.argv[sys.argv.index("--permission-mode") + 1] == "manual"
+        settings = json.loads(sys.argv[sys.argv.index("--settings") + 1])
+        assert settings["sandbox"]["enabled"] is True
+        assert settings["sandbox"]["failIfUnavailable"] is True
+        assert settings["sandbox"]["allowUnsandboxedCommands"] is False
+        assert settings["sandbox"]["autoAllowBashIfSandboxed"] is False
+        assert "Bash" in settings["permissions"]["ask"]
+        assert "statusLine" in settings and "StopFailure" in settings["hooks"]
+        assert "Interrupt" not in settings["hooks"]
+        assert os.environ["CLAUDE_CONFIG_DIR"] == CLAUDE_HOME
     hook("SessionStart")
     (root / "continued.txt").write_text(saved["checkpoint"]["next_steps"][0])
     sys.exit(0)
 '''.replace("HOOK", repr(str(app.ROOT / "scripts" / "session_hook.py")))
              .replace("CHECKPOINT", repr(self.checkpoint(**checkpoint_options)))
+             .replace("CLAUDE_HOME", repr(str(self.store.profile("claude", "two")["home"]) if cross else ""))
              .replace("SHOULD_CONTINUE", repr(not any(checkpoint_options.values()))))
         fake.chmod(0o700)
+        for provider in app.PROVIDERS:
+            (self.cwd / provider).symlink_to(fake)
 
         def fast_monitor(store, run, profile, stopped, attempt):
             while not stopped.is_set():
                 h.poll_quota(store, run, profile, attempt)
                 stopped.wait(.02)
 
-        with patch.object(app, "binary", return_value=str(fake)), patch.object(app, "identity"), \
+        def identity(store, profile):
+            if stale_on_exit and (self.cwd / "order.txt").exists() and "outgoing exited" in (self.cwd / "order.txt").read_text():
+                self.save(profile, 10, observed=time.time() - 301)
+
+        with patch.object(app, "binary", side_effect=lambda provider: str(self.cwd / provider)), \
+                patch.object(app, "identity", side_effect=identity), \
                 patch.object(app, "refresh"), patch.object(h, "monitor", side_effect=fast_monitor), \
                 patch.object(h, "preflight", return_value=True), \
                 patch.object(h.Path, "cwd", return_value=self.cwd), \
@@ -396,7 +553,15 @@ else:
                 patch.object(sys.stdout, "isatty", return_value=True), \
                 patch.object(h.termios, "tcgetattr", return_value=[]), patch.object(h.termios, "tcsetattr"), \
                 contextlib.redirect_stderr(io.StringIO()):
-            result = h.supervise(self.store, self.one, ["Fix bug without deploying"])
+            extra = ["--model", "codex-model", "--search"] if cross else []
+            if stale_on_exit:
+                with self.assertRaisesRegex(app.UserError, "Replacement no longer qualifies"):
+                    h.supervise(self.store, self.one, extra + ["Fix bug without deploying"])
+                self.assertEqual((self.cwd / "order.txt").read_text().splitlines(), ["outgoing started", "outgoing exited"])
+                self.assertFalse((self.cwd / "continued.txt").exists())
+                self.assertEqual(len(list((self.store.home / "runs").glob("*/handoff-1.json"))), 1)
+                return
+            result = h.supervise(self.store, self.one, extra + ["Fix bug without deploying"])
         self.assertEqual(result, 0)
         self.assertEqual((self.cwd / "order.txt").read_text().splitlines(),
                          ["outgoing started", "outgoing exited", "replacement started"])

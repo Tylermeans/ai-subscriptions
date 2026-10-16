@@ -2,7 +2,9 @@
 
 See your Codex and Claude Code subscription usage in **the bottom-right status
 bar of VS Code**, click through to an account usage chart, and optionally hand
-an ongoing task to another account when usage approaches its limit.
+an ongoing task to another account when usage approaches its limit. A configured
+**Codex → Claude fallback** can continue that task in Claude with a checkpoint
+and the same worktree.
 
 The `ai-sub` terminal command and shared agent skill manage separate account
 profiles on your Mac. Each person signs into their own authorized subscriptions.
@@ -12,6 +14,7 @@ that person's computer; this repository contains the reusable tool.
 **Start here:** [Install](#install) · [Show the usage chart](#show-the-usage-chart)
 · [Use it from Claude](#use-it-from-an-existing-claude-session)
 · [Add accounts](#add-another-account) · [Automatic handoffs](#automatic-handoffs)
+· [Codex → Claude](#codex--claude-fallback)
 · [Troubleshooting](#troubleshooting)
 
 ## Install
@@ -253,7 +256,8 @@ active CLI running.
 
 For a handoff to happen:
 
-- At least two distinct accounts of the **same provider** must be signed in.
+- A distinct account of the same provider, or an explicitly configured Claude
+  fallback for Codex, must be signed in and verified.
 - The standby must have fresh short-window **and** weekly quota, valid reset
   timestamps, no provider block, and usage below the threshold. A weekly-only
   report currently does **not** qualify as standby capacity.
@@ -275,9 +279,61 @@ usage but does not supervise native Claude/Codex extensions.
 
 No eligible standby, stale data, an unsafe checkpoint or an account that exhausts
 quota before checkpointing can prevent automatic continuation. **Idle Claude
-quota cannot be refreshed by this helper.** Handoffs stay within Codex or within
-Claude; there is no automatic transfer between providers. See
+quota cannot be refreshed by this helper.** Same-provider switching is the default;
+Codex → Claude requires the explicit fallback below. Claude → Codex is not yet
+supported. See
 [handoff setup and recovery](references/handoff.md) for full details.
+
+## Codex → Claude fallback
+
+Use a registered Claude profile as the fallback (replace `backup` with its label):
+
+```sh
+ai-sub verify claude backup
+ai-sub auto on codex --threshold 90 --fallback claude/backup
+cd /absolute/path/to/your/worktree
+ai-sub run codex current -- "Continue the current fix; do not deploy."
+```
+
+At the threshold, ai-sub first tries eligible Codex accounts. If none qualifies,
+it tries **only** the named Claude profile. The two providers may use the same
+email address because their subscriptions are separate. The Claude profile must
+have a verified identity and both quota windows observed within the last five
+minutes, below the source Codex threshold. Run useful work through
+`ai-sub run claude backup` in another directory to collect Claude's status-line
+observations. Signing in alone does not supply usage data.
+
+The outgoing Codex session still needs trusted hooks and a safe checkpoint.
+Claude starts only after Codex exits, with the same files, task constraints,
+completed work, next steps and tests. It receives a new conversation rather than
+a converted Codex transcript. `ai-sub sessions` shows the checkpoint path.
+
+For this transfer, Codex must use `workspace-write` and `on-request` (the managed
+defaults). Read-only and other approval modes remain eligible for same-provider
+handoffs, but cannot cross to Claude automatically. Claude starts in **manual
+permission mode with required sandboxing**, unsandboxed retries disabled, and
+approval prompts for shell commands, edits and web tools. Codex model names,
+flags and approvals are not replayed into Claude. Claude's own configuration and
+managed policy still apply; custom Codex security policies are not translated.
+If Claude cannot start or loses eligibility during shutdown, the checkpoint stays
+available for recovery. No automatic move back to Codex is attempted.
+
+```sh
+ai-sub auto status codex
+ai-sub auto on codex --clear-fallback  # keep same-provider switching
+ai-sub auto off codex                 # stop future handoffs from Codex
+```
+
+Changing this setting does not adopt an already-running bare Codex session.
+Restart sessions created with an older ai-sub version to load the new supervisor.
+The Claude fallback works even if `auto` is off for Claude; that setting controls
+whether Claude can subsequently switch to another Claude account.
+
+**Foreman:** this implements the interactive `ai-sub run` path. Foreman owns its
+headless worker processes, authentication and workspace guards; its workers are
+not automatically wrapped or rerouted by this setting. The portable checkpoint
+format and the separate worker integration requirements are documented in
+[the Foreman integration notes](references/foreman.md).
 
 ## Check usage and handoff progress
 
@@ -363,7 +419,9 @@ python3 scripts/build_vscode.py
 
 Tests use temporary profiles and simulated provider responses; they do not need
 credentials or make model calls. Handoff tests exercise both providers' process
-exit ordering, worktree edits and task continuity. Authenticated handoffs and
+exit ordering, Codex → Claude launch options, worktree edits and task continuity.
+They also check that quota expiring during shutdown prevents replacement launch.
+Authenticated handoffs and
 mailbox reauthentication still need verification on each user's machine.
 
 To remove installed links, the background sampler and the VS Code indicator:

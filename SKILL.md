@@ -1,6 +1,6 @@
 ---
 name: ai-subscriptions
-description: Switch Codex and Claude Code subscription profiles, track short-window and weekly usage, enable cooperative mid-session handoffs with task checkpoints, and guide Chrome sign-in and email reauthentication. Use for subscription account switching, quota checks, task continuity between accounts, or subscription login; not API-key billing.
+description: Switch Codex and Claude Code subscription profiles, track short-window and weekly usage, enable cooperative mid-session handoffs including an explicit Codex-to-Claude fallback, and guide Chrome sign-in and email reauthentication. Use for subscription account switching, quota checks, task continuity between accounts or providers, or subscription login; not API-key billing.
 ---
 
 Use the bundled terminal command `ai-sub`. If it is not on PATH, run
@@ -68,7 +68,14 @@ shows managed runs and checkpoint paths. `ai-sub auto off [PROVIDER]` disables i
 Read [references/handoff.md](references/handoff.md) for setup and supported modes.
 
 A managed session requests a checkpoint when fresh quota reaches its threshold
-and another verified account of the same provider has fresh, complete capacity.
+and another verified account has fresh, complete capacity. Same-provider accounts
+are preferred. To allow Codex → Claude, explicitly configure
+`ai-sub auto on codex --fallback claude/NAME`; only that Claude profile is eligible.
+Use `--clear-fallback` with `auto on codex` to remove it. No reverse transfer is
+implemented. Codex must use workspace-write and on-request for this move; Claude
+starts with its own manual permission mode and required sandboxing. Do not claim
+that custom Codex security policies or prior approvals transfer to Claude.
+
 On an `AI-SUB HANDOFF REQUEST`, finish active work, collect subagent results and
 wait for background jobs. Return the requested `ai-sub-handoff` JSON block in
 your final response with an accurate task status, constraints, tests and next
@@ -83,6 +90,8 @@ for user input must remain idle. Checkpoints summarize task context; they do not
 transfer full native conversation history or expand permissions.
 
 Existing bare CLI, desktop and VS Code extension sessions cannot be adopted.
+Foreman's headless workers are not supervised by `ai-sub run`; see
+[the integration boundary and checkpoint format](references/foreman.md).
 Codex requires all injected hooks to be trusted in `/hooks` for each profile,
 then a restart. Claude requires native workspace trust and empty background-task
 reports. Missing/stale quota, absent hooks or an unsafe checkpoint prevents a

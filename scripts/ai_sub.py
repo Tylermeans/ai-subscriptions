@@ -529,7 +529,7 @@ def login(store, profile):
         pending.unlink(missing_ok=True)
 
 
-def session_command(store, profile, extra, hooks=None):
+def session_command(store, profile, extra, hooks=None, handoff_settings=None):
     command = [binary(profile["provider"])]
     env = cli_env(store, profile)
     if profile["provider"] == "claude":
@@ -544,6 +544,8 @@ def session_command(store, profile, extra, hooks=None):
             env.pop("AI_SUB_PREVIOUS_STATUSLINE", None)
         hook = shlex.join([sys.executable, str(Path(__file__).resolve()), "statusline", profile["name"]])
         overlay = {"statusLine": {"type": "command", "command": hook}}
+        if handoff_settings:
+            overlay.update(handoff_settings)
         if hooks:
             overlay["hooks"] = hooks
         command += ["--settings", json.dumps(overlay, separators=(",", ":"))]
@@ -590,6 +592,9 @@ def parser():
     s.add_argument("mode", choices=("on", "off", "status"))
     s.add_argument("provider", choices=PROVIDERS, nargs="?")
     s.add_argument("--threshold", type=int, default=None, help="Used percent that requests a handoff (50–95; default 90)")
+    fallback = s.add_mutually_exclusive_group()
+    fallback.add_argument("--fallback", metavar="claude/NAME", help="For auto on codex: use this Claude profile when no Codex standby qualifies")
+    fallback.add_argument("--clear-fallback", action="store_true", help="For auto on codex: return to Codex-only handoffs")
     sub.add_parser("sessions", help="List managed runs and private continuation files")
     s = sub.add_parser("dashboard", help="Open the local usage chart or return its data")
     s.add_argument("--json", action="store_true", help="Read normalized chart data without fetching provider usage")
@@ -684,7 +689,7 @@ def main(argv=None):
     elif action in ("auto", "sessions"):
         from handoff import configure, sessions
         if action == "auto":
-            configure(store, args.mode, args.provider, args.threshold)
+            configure(store, args.mode, args.provider, args.threshold, args.fallback, args.clear_fallback)
         else:
             sessions(store)
     elif action == "dashboard":
