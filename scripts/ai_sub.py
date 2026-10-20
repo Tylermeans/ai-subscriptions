@@ -289,13 +289,14 @@ class CodexRPC:
 
 
 def identity(store, profile, rpc=None):
+    login_command = f'ai-sub login {profile["provider"]} {profile["name"]}'
     if profile["provider"] == "codex":
         if rpc is None:
             with CodexRPC(store, profile) as connection:
                 return identity(store, profile, connection)
         account = rpc.request("account/read", {"refreshToken": False}).get("account") or {}
         if account.get("type") != "chatgpt":
-            raise UserError("This profile needs a ChatGPT subscription login. Run ai-sub login.")
+            raise UserError(f'This profile needs a ChatGPT subscription login. Run: {login_command}')
         result = {"email": account.get("email"), "plan": account.get("planType")}
     else:
         proc = subprocess.run([binary("claude"), "auth", "status", "--json"],
@@ -303,11 +304,11 @@ def identity(store, profile, rpc=None):
         try:
             account = json.loads(proc.stdout)
         except ValueError:
-            raise UserError("Claude auth status is unavailable; run ai-sub login.") from None
+            raise UserError(f'Claude auth status is unavailable. Run: {login_command}') from None
         if (proc.returncode or not account.get("loggedIn") or account.get("authMethod") != "claude.ai"
                 or not account.get("subscriptionType")
                 or account.get("apiProvider", "firstParty") != "firstParty"):
-            raise UserError("This profile needs a Claude subscription login. Run ai-sub login.")
+            raise UserError(f'This profile needs a Claude subscription login. Run: {login_command}')
         result = {"email": account.get("email"), "plan": account.get("subscriptionType")}
         if not result["email"]:
             # Some releases expose email only in the human-readable status.
@@ -505,18 +506,37 @@ def chrome_open(url, chrome_profile=None):
         subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def login(store, profile):
-    pending = private_dir(store.home / "pending") / (profile_key(profile).replace("/", "-") + ".json")
-    write_json(pending, {"profile": profile_key(profile), "started": time.time(),
-                         "email": profile.get("email"), "inbox": profile.get("inbox")})
+def login(store, profile, extra=()):
     provider = profile["provider"]
     command = [binary(provider)]
     if provider == "codex":
         command += ["login"]
     else:
+        options = argparse.ArgumentParser(prog="claude auth login")
+        options.add_argument("--email")
+        options.add_argument("--claudeai", action="store_true")
+        options.add_argument("--sso", action="store_true")
+        options.add_argument("--console", action="store_true")
+        args = options.parse_args(extra)
+        if args.console:
+            raise UserError("ai-sub profiles use Claude subscriptions. For native Console login, "
+                            "run: command claude auth login --console")
+        expected = profile.get("email") or profile.get("verified_email")
+        validate_metadata(email=args.email)
+        if args.email and expected and args.email.casefold() != expected.casefold():
+            raise UserError(f'{profile_key(profile)} expects {clean_text(expected)}. '
+                            'For another account, run ai-sub add claude NAME --email ADDRESS, '
+                            'then ai-sub login claude NAME and ai-sub use claude NAME.')
+        if args.email:
+            profile = {**profile, "email": args.email}
         command += ["auth", "login", "--claudeai"]
-        if profile.get("email"):
-            command += ["--email", profile["email"]]
+        if args.email or expected:
+            command += ["--email", args.email or expected]
+        if args.sso:
+            command += ["--sso"]
+    pending = private_dir(store.home / "pending") / (profile_key(profile).replace("/", "-") + ".json")
+    write_json(pending, {"profile": profile_key(profile), "started": time.time(),
+                         "email": profile.get("email"), "inbox": profile.get("inbox")})
     print(f"Signing in {profile_key(profile)}. Use the account associated with this profile.", flush=True)
     print("Chrome opens through BROWSER when the CLI honors it; otherwise open the CLI link in Chrome.", flush=True)
     try:

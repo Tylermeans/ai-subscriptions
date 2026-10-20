@@ -44,6 +44,23 @@ def passthrough(provider, extra):
 
 
 def launch(provider, extra):
+    # Login must work before identity checks and handoff argument validation.
+    # Use the same profile as interactive sessions, including for auth status
+    # and logout; authenticating the native default home cannot repair it.
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    auth = extra[:1] in (["login"], ["auth"])
+    if provider == "claude" and interactive and auth:
+        extra = ["auth", *extra] if extra[0] == "login" else extra
+        if len(extra) > 1 and not any(arg in ("--help", "-h") for arg in extra):
+            store = app.Store()
+            profile = store.profile(provider)
+            if extra[1] == "login":
+                app.login(store, profile, extra=extra[2:])
+                return 0
+            print(f'Using {app.profile_key(profile)} for Claude authentication.', file=sys.stderr, flush=True)
+            command = [app.binary(provider), *extra]
+            os.execvpe(command[0], command, app.cli_env(store, profile))
+            return 0
     if passthrough(provider, extra):
         # No Store, login checks, environment cleanup, or hooks for native admin
         # commands and headless workers. Shell functions are invisible to which().

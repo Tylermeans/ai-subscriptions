@@ -222,6 +222,8 @@ Open a new terminal. The commands are ready automatically:
 
 ```sh
 ai-sub use claude work          # choose a saved account; does not log in/out
+claude login                   # sign in to the selected Claude profile
+claude auth status             # check that same profile's login
 ai-sub auto on claude           # enable automatic handoffs
 claude                         # same as ai-sub run claude
 claude --permission-mode auto  # preserve Claude's native Auto mode
@@ -248,7 +250,16 @@ continues in the same worktree with task notes, not full native chat history.
 Native resume/fork and other unsupported managed options produce a visible
 error rather than silently disabling supervision.
 
-Headless calls (`claude -p`, `codex exec`, redirected input/output) and native
+Interactive `claude login` (an ai-sub alias for `claude auth login`) and
+`claude auth login` run the official subscription login for the selected profile,
+even when it is logged out or automatic handoffs are enabled. Login pre-fills
+the profile's email and verifies it after sign-in. `--email` must match the
+profile; use [Add another account](#add-another-account) for a different email.
+`--sso` is also supported. Interactive `claude auth status` and `claude auth logout`
+use that same profile. `ai-sub login claude NAME` signs into a named profile
+directly, without changing the selection.
+
+Headless calls (`claude -p`, `codex exec`, redirected input/output) and other native
 administration commands pass through with their existing environment. Foreman
 workers and native editor extensions are not intercepted. Those calls use
 their own native account configuration, not the ai-sub selected profile.
@@ -479,6 +490,7 @@ may contain confidential project context; do not put secrets in them.
 | No bottom-right indicator | Run `python3 install.py --vscode`, reload VS Code, and ensure its status bar is visible. Check that AI Subscription Usage is enabled. |
 | Indicator says usage unavailable | Set the absolute `aiSubscriptions.executablePath` in VS Code User settings; check Python and run `ai-sub doctor` in a regular terminal. |
 | An account is listed but cannot launch | Run `ai-sub verify PROVIDER NAME`, then `ai-sub login PROVIDER NAME` if needed. Registration alone is not authentication. |
+| Claude needs login while automatic handoffs are on | Run `claude login` or `ai-sub login claude NAME` in your terminal. Login works before handoff and identity checks. Use `claude auth status` to check the selected profile. |
 | Login cannot start its OAuth callback server | Run `ai-sub login PROVIDER NAME` in your regular Mac terminal outside the agent sandbox. |
 | Claude usage is unknown or stale | Launch that profile with `ai-sub run claude NAME`. A response can supply quota; `--refresh` does not fetch idle Claude usage. |
 | Claude keeps retrying a weekly limit | Cancel the retry, exit to your shell, then launch an available profile explicitly. A failed turn cannot create the task checkpoint needed for a safe mid-session handoff. |

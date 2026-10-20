@@ -261,6 +261,44 @@ for line in sys.stdin:
             with self.assertRaises(app.UserError):
                 app.identity(self.store, profile)
 
+    def test_login_rejects_wrong_profile_email_and_console_before_starting_oauth(self):
+        profile = self.profile("claude", email="work@example.com")
+        for extra in (["--email", "other@example.com"], ["--console"]):
+            with self.subTest(extra=extra), patch.object(app, "binary", return_value="claude"), \
+                 patch.object(app.subprocess, "run") as run:
+                with self.assertRaises(app.UserError):
+                    app.login(self.store, profile, extra)
+                run.assert_not_called()
+                self.assertFalse((self.store.home / "pending").exists())
+
+    def test_failed_login_cleans_pending_attempt_without_verifying_identity(self):
+        profile = self.profile("claude", email="work@example.com")
+        with patch.object(app, "binary", return_value="claude"), \
+             patch.object(app.subprocess, "run", return_value=app.subprocess.CompletedProcess([], 1)), \
+             patch.object(app, "identity") as identity, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(app.UserError, "Login did not complete"):
+                app.login(self.store, profile)
+        identity.assert_not_called()
+        self.assertFalse((self.store.home / "pending/claude-personal.json").exists())
+
+    def test_login_email_is_verified_even_when_profile_had_no_expected_email(self):
+        profile = self.profile("claude")
+        results = [app.subprocess.CompletedProcess([], 0),
+                   app.subprocess.CompletedProcess([], 0, json.dumps({"loggedIn": True,
+                       "authMethod": "claude.ai", "subscriptionType": "max", "email": "wrong@example.com"}))]
+        with patch.object(app, "binary", return_value="claude"), \
+             patch.object(app.subprocess, "run", side_effect=results), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(app.UserError, "does not match"):
+                app.login(self.store, profile, ["--email", "requested@example.com"])
+        self.assertIsNone(self.store.profile("claude")["verified_email"])
+
+    def test_logged_out_profile_error_contains_runnable_login_command(self):
+        profile = self.profile("claude")
+        result = app.subprocess.CompletedProcess([], 1, '{"loggedIn": false}')
+        with patch.object(app, "binary", return_value="claude"), patch.object(app.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(app.UserError, "ai-sub login claude personal"):
+                app.identity(self.store, profile)
+
     def test_claude_email_can_be_verified_from_native_text_status(self):
         profile = self.profile("claude", email="me@example.com")
         json_status = app.subprocess.CompletedProcess([], 0, json.dumps({"loggedIn": True,

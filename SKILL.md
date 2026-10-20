@@ -29,7 +29,12 @@ interactive `claude` / `codex` commands through `ai-sub run` with the selected
 profile. Setup is once per machine; already-open shells can source `native.zsh`
 once or open a new terminal. `--no-native` and `--project` skip persistence.
 See [shell setup](README.md#use-plain-claude-or-codex).
-Headless workers, native administration and editor extensions retain their own
+Interactive `claude login` and `claude auth login` sign into the selected profile
+without requiring an existing login or entering handoff supervision. The profile's
+email is pre-filled and verified afterward; add a separate profile for another
+email. Interactive `claude auth status` and `claude auth logout` use that same
+selected profile. Use `ai-sub login claude NAME` to sign into a specific profile.
+Headless workers, other native administration and editor extensions retain their own
 launch configuration. `command claude` / `command codex` bypass these functions.
 
 `use` changes the launcher default for new sessions. Automatic handoffs are a

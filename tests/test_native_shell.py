@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -36,7 +38,7 @@ class NativeShellTests(unittest.TestCase):
     def test_headless_and_admin_commands_keep_native_environment_and_never_open_store(self):
         cases = [("claude", ["-p", "Foreman worker prompt"]),
                  ("claude", ["--print", "--output-format", "stream-json", "task"]),
-                 ("claude", ["auth", "status", "--json"]),
+                 ("claude", ["mcp", "list"]),
                  ("claude", ["--version"]),
                  ("codex", ["exec", "--json", "task"]),
                  ("codex", ["mcp-server"]), ("codex", ["--help"])]
@@ -51,6 +53,78 @@ class NativeShellTests(unittest.TestCase):
                     native.launch(provider, extra)
                     self.assertEqual(execute.call_args.args[1], ["/native/provider", *extra])
                     self.assertEqual(execute.call_args.args[2], dict(os.environ))
+
+    def test_interactive_login_repairs_selected_profile_with_handoffs_on_or_off(self):
+        for automatic in (False, True):
+            for extra in (["login"], ["auth", "login"],
+                          ["login", "--email", "work@example.com", "--sso"]):
+                with self.subTest(automatic=automatic, extra=extra), tempfile.TemporaryDirectory() as directory:
+                    store = app.Store(Path(directory) / "private")
+                    store.add("claude", "other", email="other@example.com")
+                    profile = store.add("claude", "work", email="work@example.com")
+                    with store.edit() as config:
+                        config["defaults"]["claude"] = "work"
+                        config["automatic"] = {"claude": {"enabled": automatic, "threshold": 90}}
+                    login_result = subprocess.CompletedProcess([], 0)
+                    status_result = subprocess.CompletedProcess([], 0, json.dumps({
+                        "loggedIn": True, "authMethod": "claude.ai", "subscriptionType": "max",
+                        "email": "work@example.com"}))
+                    with patch.dict(os.environ, {"AI_SUB_HOME": str(store.home)}), \
+                         patch.object(sys.stdin, "isatty", return_value=True), \
+                         patch.object(sys.stdout, "isatty", return_value=True), \
+                         patch.object(app, "binary", return_value="/native/claude"), \
+                         patch.object(subprocess, "run", side_effect=[login_result, status_result]) as run, \
+                         patch.object(handoff, "supervise", side_effect=AssertionError("must not supervise login")), \
+                         contextlib.redirect_stdout(io.StringIO()):
+                        # redirect_stdout replaces the stream, so keep it interactive.
+                        with patch.object(sys.stdout, "isatty", return_value=True):
+                            self.assertEqual(app.main(["native", "claude", "--", *extra]), 0)
+                    expected = ["/native/claude", "auth", "login", "--claudeai", "--email", "work@example.com"]
+                    if "--sso" in extra:
+                        expected.append("--sso")
+                    self.assertEqual(run.call_args_list[0].args[0], expected)
+                    self.assertEqual(run.call_args_list[1].args[0], ["/native/claude", "auth", "status", "--json"])
+                    for call in run.call_args_list:
+                        self.assertEqual(call.kwargs["env"]["CLAUDE_CONFIG_DIR"], profile["home"])
+                    self.assertEqual(store.profile("claude")["verified_email"], "work@example.com")
+                    self.assertIsNone(store.profile("claude", "other")["verified_email"])
+                    self.assertFalse((store.home / "pending/claude-work.json").exists())
+
+    def test_interactive_auth_status_and_logout_use_selected_home_without_identity_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = app.Store(Path(directory) / "private")
+            profile = store.add("claude", "work")
+            for extra in (["auth", "status", "--json"], ["auth", "logout"]):
+                with self.subTest(extra=extra), \
+                     patch.dict(os.environ, {"AI_SUB_HOME": str(store.home), "CLAUDE_CONFIG_DIR": "/other/home",
+                                             "ANTHROPIC_API_KEY": "synthetic-fixture"}), \
+                     patch.object(sys.stdin, "isatty", return_value=True), \
+                     patch.object(sys.stdout, "isatty", return_value=True), \
+                     patch.object(app, "binary", return_value="/native/claude"), \
+                     patch.object(app, "identity", side_effect=AssertionError("must not check identity")), \
+                     patch.object(os, "execvpe") as execute:
+                    native.launch("claude", extra)
+                self.assertEqual(execute.call_args.args[1], ["/native/claude", *extra])
+                env = execute.call_args.args[2]
+                self.assertEqual(env["CLAUDE_CONFIG_DIR"], profile["home"])
+                self.assertNotIn("ANTHROPIC_API_KEY", env)
+
+    def test_auth_help_and_headless_auth_do_not_require_a_registered_profile(self):
+        cases = [(True, ["login", "--help"], ["auth", "login", "--help"]),
+                 (True, ["auth"], ["auth"]),
+                 (True, ["auth", "login", "--help"], ["auth", "login", "--help"]),
+                 (False, ["auth", "login"], ["auth", "login"]),
+                 (False, ["auth", "status"], ["auth", "status"])]
+        for interactive, extra, expected in cases:
+            with self.subTest(interactive=interactive, extra=extra), \
+                 patch.object(sys.stdin, "isatty", return_value=interactive), \
+                 patch.object(sys.stdout, "isatty", return_value=True), \
+                 patch.object(app, "Store", side_effect=AssertionError("must not open registry")), \
+                 patch.object(app, "binary", return_value="/native/claude"), \
+                 patch.object(os, "execvpe") as execute:
+                native.launch("claude", extra)
+                self.assertEqual(execute.call_args.args[1], ["/native/claude", *expected])
+                self.assertEqual(execute.call_args.args[2], dict(os.environ))
 
     def test_redirected_streams_do_not_wrap_a_worker(self):
         for stdin, stdout in ((False, True), (True, False), (False, False)):
