@@ -580,6 +580,34 @@ def session_command(store, profile, extra, hooks=None, handoff_settings=None):
     return command + extra, env
 
 
+EXTENSIONS = {"claude": "Claude in Chrome", "codex": "ChatGPT/Codex Chrome extension"}
+# Account settings page of each extension; None until an official extension's page is identified.
+EXTENSION_PAGES = {"claude": "chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/options.html", "codex": None}
+
+
+def extension_slot(profile):
+    # Each Chrome profile has its own extension sign-in, so track one per provider and Chrome profile.
+    return f'{profile["provider"]}@{profile.get("chrome_profile") or "Default"}'
+
+
+def extension_state(store, provider=None):
+    config = store.config()
+    defaults = config["defaults"]
+    rows = []
+    for key in PROVIDERS if provider is None else (provider,):
+        if not defaults.get(key) or f"{key}/{defaults[key]}" not in config["profiles"]:
+            continue
+        profile = config["profiles"][f"{key}/{defaults[key]}"]
+        record = config.get("extensions", {}).get(extension_slot(profile), {})
+        rows.append({"extension": EXTENSIONS[key], "chrome_profile": profile.get("chrome_profile") or "Default",
+                     "selected_profile": profile_key(profile),
+                     "expected_email": profile.get("email") or profile.get("verified_email"),
+                     "recorded_profile": record.get("profile"),
+                     "recorded_at": reset_text(record["recorded"]) if record.get("recorded") else None,
+                     "needs_switch": record.get("profile") != profile_key(profile)})
+    return rows
+
+
 def chosen_profiles(store, provider=None, name=None):
     if name:
         if not provider:
@@ -605,6 +633,10 @@ def parser():
         s = sub.add_parser(action)
         s.add_argument("provider", choices=PROVIDERS)
         s.add_argument("name", nargs="?")
+    s = sub.add_parser("extension", help="Track which account each Chrome extension is signed into")
+    s.add_argument("mode", choices=("status", "open", "done"))
+    s.add_argument("provider", choices=PROVIDERS, nargs="?")
+    s.add_argument("name", nargs="?")
     s = sub.add_parser("run")
     s.add_argument("provider", choices=PROVIDERS)
     s.add_argument("args", nargs=argparse.REMAINDER)
@@ -688,6 +720,39 @@ def main(argv=None):
         with store.edit() as config:
             config["defaults"][args.provider] = profile["name"]
         print(f'Next ai-sub run {args.provider} uses {profile["name"]}. Running sessions keep their account.')
+        for row in extension_state(store, args.provider):
+            if row["needs_switch"]:
+                print(f'{row["extension"]} (Chrome profile {row["chrome_profile"]}) is not recorded as '
+                      f'{clean_text(row["expected_email"] or row["selected_profile"])}. '
+                      f'Run ai-sub extension open {args.provider} and switch its sign-in, '
+                      f'then run: ai-sub extension done {args.provider}')
+    elif action == "extension":
+        if args.mode == "status":
+            if args.name:
+                raise UserError("extension status reports the selected profiles; omit the account name.")
+            print(json.dumps(extension_state(store, args.provider), indent=2))
+        elif args.mode == "open":
+            if not args.provider:
+                raise UserError("Specify the provider: ai-sub extension open PROVIDER [NAME]")
+            profile = store.profile(args.provider, args.name)
+            if not EXTENSION_PAGES[args.provider]:
+                raise UserError(f"No settings page is known for the {EXTENSIONS[args.provider]}; "
+                                "open it from Chrome's toolbar.")
+            # Always pass a profile directory: `open -a` does not load extension pages in a chosen profile.
+            chrome_open(EXTENSION_PAGES[args.provider], profile.get("chrome_profile") or "Default")
+            print(f'Opened {EXTENSIONS[args.provider]} settings in Chrome profile '
+                  f'{profile.get("chrome_profile") or "Default"}. Sign in as '
+                  f'{clean_text(profile.get("email") or profile.get("verified_email") or profile_key(profile))}, '
+                  f'then run: ai-sub extension done {args.provider}')
+        else:
+            if not args.provider:
+                raise UserError("Specify the provider: ai-sub extension done PROVIDER [NAME]")
+            profile = store.profile(args.provider, args.name)
+            with store.edit() as config:
+                config.setdefault("extensions", {})[extension_slot(profile)] = {
+                    "profile": profile_key(profile), "recorded": time.time()}
+            print(f'Recorded {EXTENSIONS[args.provider]} in Chrome profile '
+                  f'{profile.get("chrome_profile") or "Default"} as {profile_key(profile)}.')
     elif action == "login":
         login(store, store.profile(args.provider, args.name))
     elif action == "verify":

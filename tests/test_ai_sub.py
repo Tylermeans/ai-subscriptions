@@ -242,6 +242,43 @@ for line in sys.stdin:
             app.main(["configure", "codex", "personal", "--email", "new@example.com"])
         self.assertEqual(app.freshness(self.store.latest(profile)), "unknown")
 
+    def test_use_flags_chrome_extension_until_switch_is_recorded(self):
+        self.store.add("claude", "work", email="work@example.com")
+        self.store.add("claude", "home", email="home@example.com")
+
+        def run(*argv):
+            output = io.StringIO()
+            with patch.dict(os.environ, {"AI_SUB_HOME": str(self.store.home)}), contextlib.redirect_stdout(output):
+                app.main(list(argv))
+            return output.getvalue()
+
+        run("extension", "done", "claude", "work")
+        self.assertNotIn("Claude in Chrome", run("use", "claude", "work"))
+        self.assertIn("ai-sub extension done claude", run("use", "claude", "home"))
+        [row] = json.loads(run("extension", "status", "claude"))
+        self.assertEqual((row["recorded_profile"], row["needs_switch"]), ("claude/work", True))
+        run("extension", "done", "claude")
+        [row] = json.loads(run("extension", "status", "claude"))
+        self.assertEqual((row["recorded_profile"], row["needs_switch"]), ("claude/home", False))
+
+    def test_extension_open_targets_the_profiles_chrome_profile(self):
+        self.store.add("claude", "work", email="work@example.com", chrome="Profile 1")
+        self.store.add("codex", "work", email="work@example.com")
+        with patch.dict(os.environ, {"AI_SUB_HOME": str(self.store.home)}), \
+                patch.object(app, "chrome_open") as opened, contextlib.redirect_stdout(io.StringIO()):
+            app.main(["extension", "open", "claude"])
+            with self.assertRaises(app.UserError):
+                app.main(["extension", "open", "codex"])
+        opened.assert_called_once_with(app.EXTENSION_PAGES["claude"], "Profile 1")
+
+    def test_extension_sign_in_is_tracked_per_chrome_profile(self):
+        self.store.add("claude", "work", email="work@example.com", chrome="Profile 1")
+        self.store.add("claude", "home", email="home@example.com", chrome="Profile 2")
+        with patch.dict(os.environ, {"AI_SUB_HOME": str(self.store.home)}), contextlib.redirect_stdout(io.StringIO()):
+            app.main(["extension", "done", "claude", "home"])
+            app.main(["extension", "done", "claude", "work"])
+        self.assertEqual(set(self.store.config()["extensions"]), {"claude@Profile 1", "claude@Profile 2"})
+
     def test_old_session_cannot_write_quota_after_account_email_changes(self):
         profile = self.profile("claude", email="old@example.com")
         with patch.dict(os.environ, {"AI_SUB_HOME": str(self.store.home)}), contextlib.redirect_stdout(io.StringIO()):

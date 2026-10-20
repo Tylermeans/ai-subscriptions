@@ -37,6 +37,11 @@ selected profile. Use `ai-sub login claude NAME` to sign into a specific profile
 Headless workers, other native administration and editor extensions retain their own
 launch configuration. `command claude` / `command codex` bypass these functions.
 
+The Claude in Chrome extension keeps its own sign-in. When `use` reports an
+extension notice, run `ai-sub extension open PROVIDER`. The user switches the
+account, then record it with `ai-sub extension done PROVIDER`. Agents cannot click
+extension UI; see [references/extensions.md](references/extensions.md).
+
 `use` changes the launcher default for new sessions. Automatic handoffs are a
 separate opt-in workflow described below. Do not log out a current session to
 implement a switch. Do not overwrite or copy provider credential files.
