@@ -114,7 +114,7 @@ class SubscriptionTests(unittest.TestCase):
                    "transcript_path": "/private/project", "secret": "never-save-this",
                    "context_window": {"used_percentage": 99}}
         result = app.statusline(self.store, profile, json.dumps(payload))
-        self.assertIn("25% used", result)
+        self.assertIn("25%", result)
         sample = self.store.latest(profile)
         self.assertEqual(len(sample["windows"]), 1)
         self.assertNotIn("never-save-this", (self.store.home / "usage.sqlite3").read_bytes().decode(errors="ignore"))

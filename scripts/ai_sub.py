@@ -397,10 +397,22 @@ def refresh(store, profile):
                    error=message)
 
 
+STATUSLINE_LABELS = {"five_hour": "5h", "seven_day": "7d", "spend_limit": "spend"}
+
+
+def statusline_window(w):
+    text = f'{STATUSLINE_LABELS.get(w["label"], w["label"])} {w["used"]:g}%'
+    if w.get("reset"):
+        text += time.strftime(" ↻%H:%M" if w["reset"] - time.time() < 86400 else " ↻%a", time.localtime(w["reset"]))
+    return text
+
+
 def statusline(store, profile, raw):
+    account = clean_text(profile.get("email") or profile.get("verified_email") or "")
+    head = profile_key(profile) + (f" · {account}" if account else "")
     generation = os.environ.get("AI_SUB_PROFILE_GENERATION")
     if generation is not None and generation != str(profile.get("generation", 1)):
-        return profile_key(profile) + " | profile changed; restart this session to collect quota"
+        return head + " | profile changed; restart this session to collect quota"
     try:
         payload = json.loads(raw)
         windows = claude_windows(payload)
@@ -409,10 +421,10 @@ def statusline(store, profile, raw):
         if not previous or windows != previous["windows"] or time.time() - previous["observed"] >= 60:
             store.save(profile, windows, "claude-statusline",
                        error=None if windows else "No subscription quota in latest Claude status-line event.")
-        parts = [f'{w["label"]}: {w["used"]:g}% used' for w in windows]
-        return " | ".join([profile_key(profile)] + parts) if parts else profile_key(profile) + " | quota unavailable"
+        parts = [statusline_window(w) for w in windows]
+        return " | ".join([head] + parts) if parts else head + " | quota unavailable"
     except (ValueError, TypeError, AttributeError):
-        return profile_key(profile) + " | invalid status-line input"
+        return head + " | invalid status-line input"
 
 
 def freshness(sample, now=None):

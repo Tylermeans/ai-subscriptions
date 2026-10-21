@@ -11,9 +11,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / "scripts"))
-from ai_sub import Store, UserError, SAMPLE_SECONDS
+from ai_sub import Store, UserError, SAMPLE_SECONDS, read_json, write_json
 
 LABEL = "local.ai-subscriptions.monitor"
+STATUSLINE = "~/.claude/statusline.sh"
 
 
 def links(project=False):
@@ -23,7 +24,8 @@ def links(project=False):
     return [(Path.home() / ".local/bin/ai-sub", ROOT / "scripts/ai_sub.py"),
             (Path.home() / ".agents/skills/ai-subscriptions", ROOT),
             (Path.home() / ".codex/skills/ai-subscriptions", ROOT),
-            (Path.home() / ".claude/skills/ai-subscriptions", ROOT)]
+            (Path.home() / ".claude/skills/ai-subscriptions", ROOT),
+            (Path.home() / ".claude/statusline.sh", ROOT / "scripts/claude_statusline.sh")]
 
 
 def install_links(entries):
@@ -63,6 +65,23 @@ def background(store, uninstall=False):
     if result.returncode:
         raise UserError("LaunchAgent file is ready but bootstrap failed. Run the installer in your logged-in Mac terminal.")
     print("Background sampling enabled every 4 minutes; observations expire after 5 minutes.")
+
+
+def claude_statusline(uninstall=False):
+    path = Path.home() / ".claude/settings.json"
+    settings = read_json(path, {})
+    current = (settings.get("statusLine") or {}).get("command")
+    if uninstall:
+        if current == STATUSLINE:
+            del settings["statusLine"]
+            write_json(path, settings)
+        return
+    if current and current != STATUSLINE:
+        print("Kept your existing Claude status line; ai-sub still shows it above the account line.")
+        return
+    settings["statusLine"] = {"type": "command", "command": STATUSLINE, "padding": 0}
+    write_json(path, settings)
+    print("Claude status line shows host, repo and branch above the ai-sub account line.")
 
 
 def vscode_extension(uninstall=False):
@@ -106,13 +125,14 @@ def main():
             vscode_extension(uninstall=True)
         if not args.project:
             configure_shell(Store(), ROOT, uninstall=True)
+            claude_statusline(uninstall=True)
             background(Store(), uninstall=True)
         for target, source in entries:
             if target.is_symlink() and target.resolve() == source.resolve():
                 target.unlink()
                 print(f"Removed {target}")
         return
-    for name in ("ai_sub.py", "chrome_browser.py"):
+    for name in ("ai_sub.py", "chrome_browser.py", "claude_statusline.sh"):
         (ROOT / "scripts" / name).chmod(0o755)
     local = ROOT / "bin/ai-sub"
     install_links([(local, ROOT / "scripts/ai_sub.py")] + entries)
@@ -122,6 +142,8 @@ def main():
         if f"{provider}/current" not in config["profiles"] and (Path.home() / f".{provider}").is_dir():
             store.add(provider, "current", current=True)
             print(f"Registered existing {provider} configuration as current; no credentials copied.")
+    if not args.project:
+        claude_statusline()
     if native_paths is not None:
         configure_shell(store, ROOT, native_paths)
         print("New terminals will use ai-sub automatically when you type claude or codex.")
