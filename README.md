@@ -15,6 +15,7 @@ that person's computer; this repository contains the reusable tool.
 · [Use it from Claude](#use-it-from-an-existing-claude-session)
 · [Use plain claude or codex](#use-plain-claude-or-codex)
 · [Add accounts](#add-another-account) · [Automatic handoffs](#automatic-handoffs)
+· [Switch from inside Claude](#switch-accounts-from-inside-claude)
 · [Codex → Claude](#codex--claude-fallback)
 · [Troubleshooting](#troubleshooting)
 
@@ -388,6 +389,31 @@ Give the new session the task scope and any existing handoff notes. Supported
 Claude mode changes (`manual`, `plan`, `acceptEdits`, `auto`, `dontAsk`) are now
 preserved during Claude-to-Claude handoffs. Modes that bypass permission checks
 remain unsupported, and failures that prevent handoff are printed in the terminal.
+
+## Switch accounts from inside Claude
+
+Managed Claude sessions (plain `claude` with the shell integration, or
+`ai-sub run claude NAME`, while `ai-sub auto on claude` is set) load a small
+Claude Code mod from `claude-plugin/ai-sub-accounts`:
+
+- The prompt footer shows the account beside the other modes, for example
+  `refractors 5h 11% 7d 86% · /account`.
+- `/account` opens a picker of your Claude accounts with each one's email, usage
+  and sign-in problems. Use the arrow keys or its number, Enter to choose, Esc to
+  close. `/account NAME` switches directly; `/account cancel` withdraws a pending
+  switch.
+- Choosing an account runs `ai-sub switch claude/NAME`, which you can also run
+  from the session's own shell. It verifies that account's sign-in, reads its
+  quota, and asks Claude to take a handoff note: the objective, where things
+  stopped, decisions, completed work, findings from the conversation, and next
+  steps. ai-sub then restarts the CLI on the chosen account in the same directory.
+  The new session opens by reading the note and recapping where you left off, then
+  continues unfinished work, or waits for you if it was waiting. A band above the
+  prompt shows the pending switch and a Cancel button.
+
+A manual switch needs no usage threshold, but the target must be a different,
+verified account that is not blocked or exhausted. Sessions started before this
+version keep their old supervisor; restart them to get the picker.
 
 ## Codex → Claude fallback
 

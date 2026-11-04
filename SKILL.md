@@ -101,7 +101,9 @@ memory does not. Commands must be entered at the shell, not as Claude chat text.
 
 A managed session requests a checkpoint when fresh quota reaches its threshold
 and another verified account has fresh, complete capacity. Same-provider accounts
-are preferred. To allow Codex → Claude, explicitly configure
+are preferred. The person can also move a managed session at any time with
+`/account` in Claude or `ai-sub switch PROVIDER/NAME` from that session's shell;
+the target must be a different verified account that is not blocked. To allow Codex → Claude, explicitly configure
 `ai-sub auto on codex --fallback claude/NAME`; only that Claude profile is eligible.
 Use `--clear-fallback` with `auto on codex` to remove it. No reverse transfer is
 implemented. Codex must use workspace-write and on-request for this move; Claude

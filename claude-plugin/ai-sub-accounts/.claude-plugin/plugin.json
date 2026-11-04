@@ -1,0 +1,6 @@
+{
+  "name": "ai-sub-accounts",
+  "version": "0.1.0",
+  "description": "Shows the ai-sub subscription account in the footer and switches a managed session to another account from /account",
+  "types": "./types/index.d.ts"
+}

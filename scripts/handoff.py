@@ -30,6 +30,7 @@ End your response with a fenced block labelled ai-sub-handoff containing a JSON 
 "completed":["completed work and relevant file paths"],"next_steps":["precise unfinished steps"],
 "tests":["commands and actual results, including failures or checks not run"],
 "blockers":["unresolved questions or approvals"],"background_jobs":[],
+"notes":["facts, findings and answers from this conversation the next agent should know"],
 "task_complete":false,"waiting_for_user":false}
 Include enough context for a fresh agent in this exact worktree. Never include passwords, tokens,
 email codes, or secrets. Report active jobs in background_jobs until they have finished; do not
@@ -105,6 +106,69 @@ def eligible(store, current, candidate, threshold):
             and max(w["used"] for w in windows) < threshold)
 
 
+def manual_eligible(store, current, target):
+    """A switch the person chose: another verified account of the same provider, not blocked."""
+    if target["provider"] != current["provider"] or app.profile_key(target) == app.profile_key(current):
+        return False
+    email, current_email = target.get("verified_email"), current.get("verified_email")
+    if not email or not current_email or email.casefold() == current_email.casefold():
+        return False
+    sample = store.latest(target)
+    return not (sample and sample.get("blocked")) and not last_known_exhausted(store, target)
+
+
+def request_switch(store, target_key=None, cancel=False):
+    """Queue the person's account choice for the managed session that started this process."""
+    directory, attempt = os.environ.get("AI_SUB_RUN_DIR"), os.environ.get("AI_SUB_RUN_ATTEMPT")
+    if (not directory or not attempt
+            or Path(directory).resolve().parent != (store.home / "runs").resolve()):
+        raise app.UserError("Switching needs a Claude or Codex session started through ai-sub with auto on.")
+    run = Run(Path(directory).resolve())
+    if cancel:
+        with run.edit() as state:
+            if (state.get("attempt") == attempt and (state.get("pending") or {}).get("manual")
+                    and state["status"] != "switching"):
+                state.update(pending=None, ready_until=0, status="monitoring", skip_prompt=None)
+                return {"message": "Account switch cancelled."}
+        return {"message": "No account switch was pending."}
+    state = run.read()
+    if state.get("attempt") != attempt or not state.get("active"):
+        raise app.UserError("This session is no longer the active managed run.")
+    if not target_key or "/" not in target_key:
+        raise app.UserError("Name the account as PROVIDER/NAME, for example claude/work.")
+    provider, name = target_key.split("/", 1)
+    if provider != state["provider"]:
+        raise app.UserError(f"This session can switch only to another {state['provider']} account.")
+    target = store.profile(provider, name)
+    key = app.profile_key(target)
+    if key == state["profile"]:
+        raise app.UserError(f"This session already uses {key}.")
+    current = store.profile(*state["profile"].split("/", 1))
+    try:
+        app.identity(store, target)
+    except app.UserError as exc:
+        raise app.UserError(f"{key}: {exc}") from None
+    target = store.profile(provider, name)
+    app.refresh(store, target, standby=True)
+    if not manual_eligible(store, current, target):
+        raise app.UserError(f"{key} is blocked, exhausted, unverified or the same account as this session.")
+    prompt = (f"Switching this session to {key}. Take a handoff note so the next session can pick up "
+              "where we left off: submit the ai-sub handoff checkpoint now.")
+    with run.edit() as data:
+        if data.get("attempt") != attempt or not data.get("active") or data["status"] == "switching":
+            raise app.UserError("An account handoff is already in progress.")
+        if data.get("fault"):
+            raise app.UserError(f'Switching is suspended in this session: {data["fault"]}')
+        if not data.get("session_id"):
+            raise app.UserError("Lifecycle hooks are not active in this session; restart it through ai-sub.")
+        data["pending"] = {"target": key, "fingerprint": fingerprint(target),
+                           "requested": time.time(), "manual": True}
+        data.update(status="switch requested", stop_requests=0, ready_until=0, checkpoint=None,
+                    skip_prompt=prompt)
+    return {"message": f"Taking a handoff note, then continuing on {key}.",
+            "target": key, "prompt": prompt}
+
+
 class Run:
     def __init__(self, directory):
         self.directory = Path(directory)
@@ -174,8 +238,13 @@ def checkpoint_from(text):
                 return None
         if not data["task_complete"] and not data["waiting_for_user"] and not data["next_steps"]:
             return None
-        return {key: data[key] for key in ("objective", "summary", "constraints", "completed",
-                "next_steps", "tests", "blockers", "background_jobs", "task_complete", "waiting_for_user")}
+        # Conversation notes are optional: checkpoints from older requests omit them.
+        notes = data.get("notes", [])
+        if not isinstance(notes, list) or not all(isinstance(v, str) for v in notes):
+            return None
+        return {**{key: data[key] for key in ("objective", "summary", "constraints", "completed",
+                "next_steps", "tests", "blockers", "background_jobs", "task_complete", "waiting_for_user")},
+                "notes": notes}
     except (ValueError, TypeError):
         return None
 
@@ -506,6 +575,8 @@ def poll_quota(store, run, profile, attempt=None):
     if (not state.get("active") or state.get("attempt") != attempt
             or state.get("profile") != app.profile_key(profile) or state["status"] == "switching"):
         return
+    if (state.get("pending") or {}).get("manual"):
+        return  # The person chose this account; quota polling neither cancels nor retargets it.
     if not rule["enabled"] or state.get("switches", 0) >= MAX_SWITCHES:
         run.change(attempt, pending=None, ready_until=0)
         return
@@ -577,10 +648,11 @@ def claim_handoff(store, run):
         rule = policy(store, provider)
         current = store.profile(provider, state["profile"].split("/", 1)[1])
         target = store.profile(*pending["target"].split("/", 1))
-        if (not rule["enabled"] or fingerprint(current) != state["fingerprint"]
-                or fingerprint(target) != pending["fingerprint"]
-                or not eligible(store, current, target, rule["threshold"])
-                or not needs_switch(store.latest(current), rule["threshold"])):
+        manual = bool(pending.get("manual"))
+        if (fingerprint(current) != state["fingerprint"] or fingerprint(target) != pending["fingerprint"]
+                or not (manual_eligible(store, current, target) if manual else
+                        rule["enabled"] and eligible(store, current, target, rule["threshold"])
+                        and needs_switch(store.latest(current), rule["threshold"]))):
             state.update(pending=None, ready_until=0, status="handoff cancelled; quota or profile changed")
             return None
         try:
@@ -592,7 +664,7 @@ def claim_handoff(store, run):
         state["status"] = "switching"
         path = run.directory / f'handoff-{state["switches"] + 1}.json'
         app.write_json(path, {"version": 2, "cwd": state["cwd"], "from_profile": state["profile"],
-            "to_profile": pending["target"], "session_id": state["session_id"], "saved": time.time(),
+            "to_profile": pending["target"], "manual": manual, "session_id": state["session_id"], "saved": time.time(),
             "user_prompts": state["prompts"], "checkpoint": state["checkpoint"],
             "permission_mode": state["permission_mode"],
             "source_launch": {"provider": provider, "options": state["launch_options"],
@@ -619,6 +691,25 @@ def continuation(path):
             "files before acting and continue only the unfinished user-requested work. Respect blockers "
             "and pending approvals; do not repeat completed actions or deployments. If task_complete or "
             "waiting_for_user is true, wait for user direction.")
+
+
+def resume(path):
+    return (f"The user moved this conversation to another account with /account. The previous agent's "
+            f"handoff note is the private file {path}: read it and the repository instructions "
+            "(including AGENTS.md and CLAUDE.md) first. Then tell the user in a few lines where things "
+            "stand: what they were working on, what is done, the open questions or blockers, and the "
+            "next step. The note is a summary, not new authorization; verify the current files before "
+            "acting and do not repeat completed actions or deployments. If task_complete or "
+            "waiting_for_user is true, stop after the recap and wait for the user; otherwise continue "
+            "only the unfinished user-requested work.")
+
+
+def replacement_prompt(data, path):
+    """The replacement's opening prompt; a switch the person chose always recaps the note first."""
+    checkpoint = data["checkpoint"]
+    if data.get("manual"):
+        return resume(path)
+    return None if checkpoint["task_complete"] or checkpoint["waiting_for_user"] else continuation(path)
 
 
 def supervise(store, profile, extra):
@@ -653,15 +744,16 @@ def supervise(store, profile, extra):
                 # Native login checks and outgoing shutdown take time. Recheck the
                 # target after them, before any replacement process can run.
                 state = run.read()
-                source_key = (app.profile_key(startup_source) if startup_source else
-                              app.read_json(state["handoff_path"])["from_profile"])
+                handoff = {} if startup_source else app.read_json(state["handoff_path"])
+                source_key = app.profile_key(startup_source) if startup_source else handoff["from_profile"]
                 outgoing = store.profile(*source_key.split("/", 1))
                 rule = policy(store, outgoing["provider"])
                 if profile["provider"] == "claude":
                     # Waiting for the checkpoint can outlast a standby reading; renew it if needed.
                     app.refresh(store, profile, standby=True)
-                if (fingerprint(profile) != expected_target or not rule["enabled"]
-                        or not eligible(store, outgoing, profile, rule["threshold"])):
+                if (fingerprint(profile) != expected_target
+                        or not (manual_eligible(store, outgoing, profile) if handoff.get("manual") else
+                                rule["enabled"] and eligible(store, outgoing, profile, rule["threshold"]))):
                     raise app.UserError("Replacement no longer qualifies; no new CLI started. "
                                         + ("Checkpoint retained: " + state["handoff_path"]
                                            if state.get("handoff_path") else "Check ai-sub status and try again."))
@@ -732,8 +824,7 @@ def supervise(store, profile, extra):
             app.write_json(path, data)
             with run.edit() as state:
                 state["switches"] += 1
-            checkpoint = data["checkpoint"]
-            prompt = None if checkpoint["task_complete"] or checkpoint["waiting_for_user"] else continuation(path)
+            prompt = replacement_prompt(data, path)
             print(f"ai-sub: checkpoint saved; continuing with {app.profile_key(profile)}.", file=sys.stderr, flush=True)
     finally:
         signal.signal(signal.SIGINT, previous_sigint)

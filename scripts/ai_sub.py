@@ -202,6 +202,7 @@ def cli_env(store, profile):
     for key in ("AI_SUB_RUN_DIR", "AI_SUB_RUN_ATTEMPT"):
         env.pop(key, None)
     env["AI_SUB_HOME"] = str(store.home.resolve())
+    env["AI_SUB_EXECUTABLE"] = str(Path(__file__).resolve())
     env["AI_SUB_PROFILE"] = profile_key(profile)
     env["AI_SUB_PROFILE_GENERATION"] = str(profile.get("generation", 1))
     if profile["provider"] == "codex":
@@ -650,6 +651,9 @@ def session_command(store, profile, extra, hooks=None, handoff_settings=None):
         if hooks:
             overlay["hooks"] = hooks
         command += ["--settings", json.dumps(overlay, separators=(",", ":"))]
+        if hooks:
+            # The account band and /account picker request manual handoffs in managed sessions.
+            command += ["--plugin-dir", str(ROOT / "claude-plugin" / "ai-sub-accounts")]
     else:
         command += ["-c", 'forced_login_method="chatgpt"']
         if hooks:
@@ -732,6 +736,10 @@ def parser():
     fallback.add_argument("--fallback", metavar="claude/NAME", help="For auto on codex: use this Claude profile when no Codex standby qualifies")
     fallback.add_argument("--clear-fallback", action="store_true", help="For auto on codex: return to Codex-only handoffs")
     sub.add_parser("sessions", help="List managed runs and private continuation files")
+    s = sub.add_parser("switch", help="Move the managed session that runs this command to another account")
+    s.add_argument("target", nargs="?", metavar="PROVIDER/NAME")
+    s.add_argument("--cancel", action="store_true", help="Withdraw a pending manual switch")
+    s.add_argument("--json", action="store_true")
     s = sub.add_parser("dashboard", help="Open the local usage chart or return its data")
     s.add_argument("--json", action="store_true", help="Read normalized chart data without fetching provider usage")
     s.add_argument("--once", action="store_true", help="Write a snapshot and exit instead of updating the chart")
@@ -870,6 +878,10 @@ def main(argv=None):
             configure(store, args.mode, args.provider, args.threshold, args.fallback, args.clear_fallback)
         else:
             sessions(store)
+    elif action == "switch":
+        from handoff import request_switch
+        result = request_switch(store, args.target, cancel=args.cancel)
+        print(json.dumps(result) if args.json else result["message"])
     elif action == "dashboard":
         from dashboard import launch, snapshot
         if args.json:

@@ -424,6 +424,69 @@ class HandoffTests(unittest.TestCase):
         self.assertIsNone(self.run.read()["pending"])
         self.assertEqual(self.run.read()["status"], "quota threshold reached; no eligible standby")
 
+    def managed_env(self):
+        return patch.dict(os.environ, {"AI_SUB_RUN_DIR": str(self.run.directory),
+                                       "AI_SUB_RUN_ATTEMPT": self.attempt})
+
+    def test_manual_switch_hands_off_below_threshold_after_a_checkpoint(self):
+        self.save(self.one, 10)
+        with self.managed_env(), patch.object(app, "identity"), patch.object(app, "refresh") as refresh:
+            result = h.request_switch(self.store, "codex/two")
+        refresh.assert_called_once()
+        self.assertTrue(refresh.call_args.kwargs["standby"])
+        self.assertEqual(self.run.read()["pending"]["target"], "codex/two")
+        self.assertTrue(self.run.read()["pending"]["manual"])
+        self.request()
+        self.assertEqual(self.run.read()["pending"]["target"], "codex/two")
+        prompts = list(self.run.read()["prompts"])
+        output, _ = self.event("UserPromptSubmit", prompt=result["prompt"])
+        self.assertEqual(output["hookSpecificOutput"]["additionalContext"], h.CHECKPOINT_REQUEST)
+        self.assertEqual(self.run.read()["prompts"], prompts)
+        note = self.checkpoint(waiting_for_user=True, notes=["midwest is signed in to the right account"])
+        self.assertTrue(self.event("Stop", last_assistant_message=note)[1])
+        with patch.object(app, "identity"):
+            target, path = h.claim_handoff(self.store, self.run)
+        self.assertEqual(app.profile_key(target), "codex/two")
+        data = app.read_json(path)
+        self.assertTrue(data["manual"])
+        self.assertEqual(data["checkpoint"]["notes"], ["midwest is signed in to the right account"])
+        # Waiting for the user still opens with a recap of the note after a chosen switch.
+        self.assertEqual(h.replacement_prompt(data, path), h.resume(path))
+        self.assertIn(str(path), h.resume(path))
+
+    def test_automatic_handoff_opening_prompt_is_unchanged(self):
+        path = self.cwd / "handoff-1.json"
+        for waiting, expected in ((True, None), (False, h.continuation(path))):
+            checkpoint = h.checkpoint_from(self.checkpoint(waiting_for_user=waiting))
+            self.assertEqual(h.replacement_prompt({"checkpoint": checkpoint}, path), expected)
+
+    def test_manual_switch_refuses_unmanaged_same_mismatched_blocked_or_faulted(self):
+        with self.assertRaisesRegex(app.UserError, "started through ai-sub"):
+            h.request_switch(self.store, "codex/two")
+        claude = self.profile("other", "claude")
+        with self.managed_env(), patch.object(app, "refresh"):
+            for target, identity, message in (
+                    ("codex/one", None, "already uses"), (app.profile_key(claude), None, "another codex"),
+                    ("codex/two", app.UserError("The signed-in email does not match this profile."),
+                     "codex/two: The signed-in email")):
+                with self.subTest(target=target), patch.object(app, "identity", side_effect=identity), \
+                        self.assertRaisesRegex(app.UserError, message):
+                    h.request_switch(self.store, target)
+            with patch.object(app, "identity"):
+                self.save(self.two, 10, blocked=True)
+                with self.assertRaisesRegex(app.UserError, "blocked"):
+                    h.request_switch(self.store, "codex/two")
+                self.save(self.two, 10)
+                with self.run.edit() as state:
+                    state["fault"] = "Session directory changed; automatic handoff suspended."
+                with self.assertRaisesRegex(app.UserError, "suspended"):
+                    h.request_switch(self.store, "codex/two")
+                with self.run.edit() as state:
+                    state["fault"] = None
+                h.request_switch(self.store, "codex/two")
+                self.assertEqual(h.request_switch(self.store, cancel=True)["message"], "Account switch cancelled.")
+        self.assertIsNone(self.run.read()["pending"])
+
     def test_claude_supported_mode_changes_are_preserved_without_bypassing_permissions(self):
         profile = self.profile("claude1", "claude")
         for mode in ("auto", "plan", "acceptEdits", "dontAsk", "manual", "default"):
@@ -505,8 +568,10 @@ class HandoffTests(unittest.TestCase):
 
     def test_malformed_checkpoint_is_not_trusted(self):
         for text in ("not json", "```ai-sub-handoff\n{}\n```", self.checkpoint(task_complete="false"),
-                     self.checkpoint(next_steps=[], task_complete=False, waiting_for_user=False)):
+                     self.checkpoint(next_steps=[], task_complete=False, waiting_for_user=False),
+                     self.checkpoint(notes="not a list"), self.checkpoint(notes=[3])):
             self.assertIsNone(h.checkpoint_from(text))
+        self.assertEqual(h.checkpoint_from(self.checkpoint())["notes"], [])
 
     def test_managed_arguments_keep_options_but_do_not_replay_prompt(self):
         options, prompt = h.managed_args("codex", ["--model=m1", "--sandbox", "read-only", "Fix bug"])
@@ -531,6 +596,11 @@ class HandoffTests(unittest.TestCase):
         self.assertIn("statusLine", settings)
         self.assertIn("Stop", settings["hooks"])
         self.assertNotIn("disableAllHooks", settings)
+        plugin = Path(command[command.index("--plugin-dir") + 1])
+        self.assertTrue((plugin / ".claude-plugin" / "plugin.json").is_file())
+        self.assertEqual(env["AI_SUB_EXECUTABLE"], str(Path(app.__file__).resolve()))
+        with patch.object(app, "binary", return_value="claude"):
+            self.assertNotIn("--plugin-dir", app.session_command(self.store, profile, [])[0])
         with patch.object(app, "binary", return_value="codex"):
             command, env = app.session_command(self.store, self.one, [], h.hooks_for("codex"))
         self.assertNotIn("--dangerously-bypass-hook-trust", command)
