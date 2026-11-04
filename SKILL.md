@@ -64,7 +64,9 @@ chat replies, usage database, or shell arguments.
 - `ai-sub status --refresh` fetches Codex limits using `account/rateLimits/read`.
 - Claude limits arrive through the official status-line payload when launched
   with `ai-sub run claude NAME`, after a model response. `--refresh` does not make
-  a paid model request or pretend to refresh an idle Claude account.
+  a paid model request or pretend to refresh an idle Claude account. Only a
+  managed session at its handoff threshold reads idle Claude standbys, with one
+  minimal headless Haiku request per account at most every 3 minutes.
 - `ai-sub watch --interval 240` monitors in a terminal. The global installer can
   also set up a 4-minute macOS background sampler; see the installation README.
 - `ai-sub history --days 7` shows recorded observations, with up to 90 days retained.

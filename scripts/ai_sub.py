@@ -31,6 +31,16 @@ AUTH_ENV = ("OPENAI_API_KEY", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN",
             "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR", "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR")
 ROUTING_ENV = ("ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "CLAUDE_CODE_USE_BEDROCK",
                "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
+SESSION_ENV = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_ENTRYPOINT",
+               "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN",
+               "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_PID")
+# An idle Claude account reports quota only in the rate_limit_event that follows a response.
+# This is the smallest such request: no tools, MCP servers, settings files or saved session.
+PROBE_ARGS = ("-p", "Reply with OK.", "--output-format", "stream-json", "--verbose", "--model", "haiku",
+              "--tools", "", "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence",
+              "--system-prompt", "Reply with OK.")
+# Renew a standby reading before handoff checks, which require it under FRESH_SECONDS old.
+PROBE_REFRESH_SECONDS = FRESH_SECONDS - 120
 
 
 class UserError(Exception):
@@ -378,9 +388,68 @@ def claude_windows(payload):
     return windows
 
 
-def refresh(store, profile):
+def probe_windows(stream):
+    """Normalize the last rate_limit_event of a headless run; discard all other output."""
+    windows, blocked = [], None
+    for line in stream.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "rate_limit_event":
+            continue
+        info = event.get("rate_limit_info")
+        if not isinstance(info, dict):
+            continue
+        found, unified = [], info.get("unifiedWindows")
+        for label, minutes in (("five_hour", 300), ("seven_day", 10080)):
+            value = unified.get(label) if isinstance(unified, dict) else None
+            if not isinstance(value, dict) or not number(value.get("utilization")):
+                continue
+            normalized = window(label, min(round(value["utilization"] * 100, 2), 100.0),
+                                value.get("resetsAt"), minutes)
+            if normalized:
+                found.append(normalized)
+        if found:
+            windows = found
+            blocked = None if not info.get("status") else info["status"] == "rejected"
+    return windows, blocked
+
+
+def probe(store, profile):
+    folder = private_dir(store.home / "probe")
+    lock = os.open(folder / f'{profile["provider"]}-{profile["name"]}.lock', os.O_CREAT | os.O_RDWR, 0o600)
+    with os.fdopen(lock, "w") as stream:
+        # Sessions that reach the threshold together share one request per account.
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        previous = store.latest(profile)
+        if (previous and 0 <= time.time() - previous["observed"] < PROBE_REFRESH_SECONDS
+                and (freshness(previous) == "fresh" or previous["source"] == "claude-probe")):
+            return  # A recent reading, or a failed request that is not retried yet.
+        try:
+            identity(store, profile)
+            env = cli_env(store, profile)
+            for key in SESSION_ENV:
+                env.pop(key, None)
+            proc = subprocess.run([binary("claude"), *PROBE_ARGS], cwd=folder, env=env,
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=90)
+            windows, blocked = probe_windows(proc.stdout)
+            error = None if windows else "Headless Claude request reported no subscription quota."
+        except (UserError, OSError, subprocess.SubprocessError) as exc:
+            windows, blocked = [], None
+            error = str(exc) if isinstance(exc, UserError) else "Claude CLI quota check failed."
+        if blocked is None and previous and previous.get("blocked"):
+            blocked = True
+        store.save(profile, windows, "claude-probe", blocked, error)
+
+
+def refresh(store, profile, standby=False):
     if profile["provider"] == "claude":
-        return  # Official status-line events supply observations during active Claude sessions.
+        # Official status-line events supply observations during active Claude sessions.
+        # An idle standby has none, so a handoff decision reads it with one headless request.
+        if standby:
+            probe(store, profile)
+        return
     try:
         with CodexRPC(store, profile) as rpc:
             identity(store, profile, rpc)

@@ -375,6 +375,55 @@ class HandoffTests(unittest.TestCase):
         self.event("Stop", permission_mode="plan", last_assistant_message=self.checkpoint())
         self.assertIn("permissions changed", self.run.read()["fault"])
 
+    def test_subdirectory_of_the_same_worktree_keeps_handoff_available(self):
+        plain = self.cwd / "notes"
+        plain.mkdir()
+        self.event("PreToolUse", tool_use_id="t", cwd=str(plain))
+        self.assertIsNone(self.run.read()["fault"])
+        subprocess.run(["git", "init", "-q", str(self.cwd)], check=True)
+        nested = self.cwd / "scripts" / "deep"
+        nested.mkdir(parents=True)
+        self.event("PostToolUse", tool_use_id="t", cwd=str(nested))
+        self.assertIsNone(self.run.read()["fault"])
+        other = self.cwd / "vendor" / "other"
+        other.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(other)], check=True)
+        self.event("PreToolUse", tool_use_id="u", cwd=str(other))
+        self.assertIn("directory changed", self.run.read()["fault"])
+
+    def claude_switch_fixture(self, standby_week):
+        source, standby = self.profile("refractors", "claude"), self.profile("midwest", "claude")
+        self.attempt = self.run.begin(source)
+        self.event("SessionStart", source="startup")
+        self.save(source, 91)
+        self.save(standby, 5, observed=time.time() - 86400 * 18)
+        reading = json.dumps({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed",
+            "unifiedWindows": {"five_hour": {"utilization": 0.04, "resetsAt": time.time() + 3600},
+                               "seven_day": {"utilization": standby_week, "resetsAt": time.time() + 86400}}}})
+        return source, standby, subprocess.CompletedProcess([], 0, reading, "")
+
+    def test_claude_at_threshold_reads_idle_claude_standby_once_and_requests_handoff(self):
+        source, standby, reading = self.claude_switch_fixture(0.3)
+        with patch.object(app, "identity"), patch.object(app, "binary", return_value="claude"), \
+                patch.object(app.subprocess, "run", return_value=reading) as run:
+            h.poll_quota(self.store, self.run, source)
+            h.poll_quota(self.store, self.run, source)
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(self.run.read()["pending"]["target"], "claude/midwest")
+        self.assertEqual(self.store.latest(standby)["source"], "claude-probe")
+
+    def test_claude_standby_seen_over_threshold_is_not_read_again_before_reset(self):
+        source, standby, reading = self.claude_switch_fixture(0.95)
+        with patch.object(app, "identity"), patch.object(app, "binary", return_value="claude"), \
+                patch.object(app.subprocess, "run", return_value=reading) as run:
+            h.poll_quota(self.store, self.run, source)
+            with contextlib.closing(self.store.db()) as db, db:
+                db.execute("UPDATE samples SET observed=observed-600 WHERE profile='claude/midwest'")
+            h.poll_quota(self.store, self.run, source)
+        self.assertEqual(run.call_count, 1)
+        self.assertIsNone(self.run.read()["pending"])
+        self.assertEqual(self.run.read()["status"], "quota threshold reached; no eligible standby")
+
     def test_claude_supported_mode_changes_are_preserved_without_bypassing_permissions(self):
         profile = self.profile("claude1", "claude")
         for mode in ("auto", "plan", "acceptEdits", "dontAsk", "manual", "default"):

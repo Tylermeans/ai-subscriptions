@@ -52,7 +52,8 @@ profile was registered, follow [Add another account](#add-another-account).
 `--background` installs a macOS user LaunchAgent that samples Codex usage every
 4 minutes. Omit it if you prefer manual collection. Claude usage is collected
 from sessions launched through `ai-sub run`; the background sampler does not
-query idle Claude accounts. **Installing the sampler does not enable switching.**
+query idle Claude accounts (a handoff reads them only when it needs a target; see
+[Automatic handoffs](#automatic-handoffs)). **Installing the sampler does not enable switching.**
 
 **Setup is once per machine.** The installer configures your shell so new
 terminals automatically route interactive `claude` and `codex` commands through
@@ -361,7 +362,12 @@ usage but does not supervise native Claude/Codex extensions.
 
 No eligible standby, stale data, an unsafe checkpoint or an account that exhausts
 quota before checkpointing can prevent automatic continuation. **Idle Claude
-quota cannot be refreshed by this helper.** Same-provider switching is the default;
+standbys are read only when a handoff needs one:** once a session reaches its
+threshold, ai-sub sends each idle Claude standby one minimal headless request
+(Haiku, no tools, MCP servers, settings files or saved session) and keeps only
+the quota from the CLI's `rate_limit_event`. It verifies the account first, reads
+each account at most every 3 minutes while the handoff waits, and skips an
+account already at the threshold until its reset. Same-provider switching is the default;
 Codex → Claude requires the explicit fallback below. Claude → Codex is not yet
 supported. See
 [handoff setup and recovery](references/handoff.md) for full details.
@@ -398,9 +404,9 @@ At the threshold, ai-sub first tries eligible Codex accounts. If none qualifies,
 it tries **only** the named Claude profile. The two providers may use the same
 email address because their subscriptions are separate. The Claude profile must
 have a verified identity and both quota windows observed within the last five
-minutes, below the source Codex threshold. Run useful work through
-`ai-sub run claude backup` in another directory to collect Claude's status-line
-observations. Signing in alone does not supply usage data.
+minutes, below the source Codex threshold. When Codex reaches the threshold,
+ai-sub reads an idle Claude fallback with one minimal headless request, as
+described in [Automatic handoffs](#automatic-handoffs).
 
 The outgoing Codex session still needs trusted hooks and a safe checkpoint.
 Claude starts only after Codex exits, with the same files, task constraints,
@@ -492,7 +498,8 @@ may contain confidential project context; do not put secrets in them.
 | An account is listed but cannot launch | Run `ai-sub verify PROVIDER NAME`, then `ai-sub login PROVIDER NAME` if needed. Registration alone is not authentication. |
 | Claude needs login while automatic handoffs are on | Run `claude login` or `ai-sub login claude NAME` in your terminal. Login works before handoff and identity checks. Use `claude auth status` to check the selected profile. |
 | Login cannot start its OAuth callback server | Run `ai-sub login PROVIDER NAME` in your regular Mac terminal outside the agent sandbox. |
-| Claude usage is unknown or stale | Launch that profile with `ai-sub run claude NAME`. A response can supply quota; `--refresh` does not fetch idle Claude usage. |
+| Claude usage is unknown or stale | Launch that profile with `ai-sub run claude NAME`. A response can supply quota; `--refresh` does not fetch idle Claude usage. A handoff reads an idle standby itself when it needs one. |
+| Status shows `claude-probe` with "signed-in email does not match" | That profile is signed in to a different account than registered. Run `ai-sub login claude NAME` in your regular terminal and approve the intended account in the browser. |
 | Claude keeps retrying a weekly limit | Cancel the retry, exit to your shell, then launch an available profile explicitly. A failed turn cannot create the task checkpoint needed for a safe mid-session handoff. |
 | Auto is on but no switch occurs | Check `ai-sub sessions` and `ai-sub status`. A fresh eligible standby, trusted hooks and a safe checkpoint are all required. |
 | Only a weekly window appears | The chart shows it accurately, but current standby selection also requires a short window. Missing is not zero. |

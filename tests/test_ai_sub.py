@@ -30,6 +30,68 @@ class SubscriptionTests(unittest.TestCase):
         return [app.window("five_hour", short, reset, 300),
                 app.window("seven_day", week, reset + 86400, 10080)]
 
+    def probe_result(self, short=0.2, week=0.4, status="allowed", reset=None):
+        reset = reset or time.time() + 3600
+        event = {"type": "rate_limit_event", "rate_limit_info": {"status": status, "unifiedWindows": {
+            "five_hour": {"utilization": short, "resetsAt": reset, "status": status},
+            "seven_day": {"utilization": week, "resetsAt": reset + 86400, "status": status}}}}
+        lines = ["not json", "[1]", json.dumps({"type": "assistant", "message": {"content": "private"}}),
+                 json.dumps(event), json.dumps({"type": "result", "subtype": "success"})]
+        return app.subprocess.CompletedProcess([], 0, "\n".join(lines), "")
+
+    def test_claude_probe_keeps_only_the_official_rate_limit_event(self):
+        windows, blocked = app.probe_windows(self.probe_result(0.07, 0.86).stdout)
+        self.assertEqual([(w["label"], w["used"], w["minutes"]) for w in windows],
+                         [("five_hour", 7.0, 300.0), ("seven_day", 86.0, 10080.0)])
+        self.assertIs(blocked, False)
+        windows, blocked = app.probe_windows(self.probe_result(1.2, 0.5, "rejected").stdout)
+        self.assertEqual((windows[0]["used"], blocked), (100.0, True))
+        self.assertEqual(app.probe_windows('{"type": "rate_limit_event", "rate_limit_info": {}}'), ([], None))
+
+    def test_claude_standby_probe_is_minimal_shared_and_paced_across_dst(self):
+        profile = self.profile("claude", "midwest", "m@example.com")
+        zone = os.environ.get("TZ")
+        self.addCleanup(lambda: (os.environ.pop("TZ", None) if zone is None
+                                 else os.environ.__setitem__("TZ", zone), time.tzset()))
+        # 2026-11-01 06:00Z (fall-back) and 2027-03-14 07:00Z (spring-forward), America/New_York.
+        for instant in (1793512800.0, 1805007600.0):
+            for tz in ("UTC", "America/New_York"):
+                with self.subTest(instant=instant, tz=tz):
+                    os.environ["TZ"] = tz
+                    time.tzset()
+                    with contextlib.closing(self.store.db()) as db, db:
+                        db.execute("DELETE FROM samples")
+                    clock = [instant - 1]
+                    with patch.object(app.time, "time", side_effect=lambda: clock[0]), \
+                            patch.object(app, "identity"), patch.object(app, "binary", return_value="claude"), \
+                            patch.object(app.subprocess, "run", side_effect=lambda *a, **k:
+                                         self.probe_result(reset=clock[0] + 3600)) as run, \
+                            patch.dict(os.environ, {"CLAUDECODE": "1"}):
+                        app.refresh(self.store, profile)
+                        run.assert_not_called()
+                        app.refresh(self.store, profile, standby=True)
+                        self.assertEqual(run.call_count, 1)
+                        self.assertEqual(run.call_args.args[0], ["claude", *app.PROBE_ARGS])
+                        options = run.call_args.kwargs
+                        self.assertEqual(options["cwd"], self.store.home / "probe")
+                        self.assertEqual(options["env"]["CLAUDE_CONFIG_DIR"], profile["home"])
+                        self.assertNotIn("CLAUDECODE", options["env"])
+                        sample = self.store.latest(profile)
+                        self.assertEqual((sample["source"], app.freshness(sample)), ("claude-probe", "fresh"))
+                        clock[0] = instant + app.PROBE_REFRESH_SECONDS - 2
+                        app.refresh(self.store, profile, standby=True)
+                        self.assertEqual(run.call_count, 1)
+                        clock[0] = instant + app.PROBE_REFRESH_SECONDS
+                        app.refresh(self.store, profile, standby=True)
+                        self.assertEqual(run.call_count, 2)
+                        run.side_effect = app.subprocess.TimeoutExpired("claude", 90)
+                        clock[0] += app.PROBE_REFRESH_SECONDS
+                        app.refresh(self.store, profile, standby=True)
+                        self.assertEqual(self.store.latest(profile)["error"], "Claude CLI quota check failed.")
+                        clock[0] += 60
+                        app.refresh(self.store, profile, standby=True)
+                        self.assertEqual(run.call_count, 3)
+
     def test_profiles_keep_independent_homes_and_no_credentials_are_copied(self):
         one = self.profile(name="one")
         two = self.profile(name="two")

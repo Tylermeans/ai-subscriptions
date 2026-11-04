@@ -42,8 +42,11 @@ after a response, when available for that account. The prior **user** status-lin
 command is passed its original stdin and shown above the quota line. A
 project-specific or separately supplied status line is not composed; the
 launcher's explicit overlay wins. Print-only/noninteractive Claude invocations
-may not emit status-line updates. Idle accounts require a new active-session
-observation or inspection of the official usage UI.
+may not emit status-line updates. For handoff targets only, an idle account is
+read through `claude -p --output-format stream-json --verbose`, whose
+`rate_limit_event.rate_limit_info.unifiedWindows` reports `five_hour` and
+`seven_day` utilization (0–1) and `resetsAt`; `status: "rejected"` is a block.
+Verified against Claude Code 2.1.311 on 2026-11-04. All other output is discarded.
 
 The collector intentionally does not use context-window percentages, local
 token estimates, or API-dollar totals as subscription quota. Status-line inputs

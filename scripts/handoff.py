@@ -180,6 +180,26 @@ def checkpoint_from(text):
         return None
 
 
+def same_worktree(path, root):
+    """The run directory, or a subdirectory of it inside the same Git worktree (or none)."""
+    path, root = Path(path).resolve(), Path(root)
+    if path == root:
+        return True
+    if root not in path.parents:
+        return False
+    tops = []
+    for folder in (path, root):
+        try:
+            proc = subprocess.run(["git", "--no-optional-locks", "rev-parse", "--show-toplevel"],
+                                  cwd=folder, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if proc.returncode and "not a git repository" not in proc.stderr:
+            return False
+        tops.append(None if proc.returncode else proc.stdout.strip())
+    return tops[0] == tops[1]
+
+
 def hook_event(run, payload, attempt):
     """Return (provider JSON output, hold Stop hook). Never save raw tool/credential payloads."""
     event = payload.get("hook_event_name")
@@ -198,7 +218,7 @@ def hook_event(run, payload, attempt):
             if event == "SessionStart" and payload.get("source") in ("clear", "resume"):
                 state["fault"] = "Native session changed; restart a managed run for this conversation."
             return {}, False
-        if not payload.get("cwd") or Path(payload["cwd"]).resolve() != Path(state["cwd"]):
+        if not payload.get("cwd") or not same_worktree(payload["cwd"], state["cwd"]):
             state["fault"] = "Session directory changed; automatic handoff suspended."
             return {}, False
         state["hooks_seen"] = sorted(set(state["hooks_seen"] + [event]))
@@ -414,8 +434,10 @@ def standby_profiles(store, current, rule, state):
     for candidate in available:
         if app.profile_key(candidate) == app.profile_key(current):
             continue
+        if candidate["provider"] == "claude" and full_until_reset(store, candidate, rule["threshold"]):
+            continue  # Reading this standby costs a request and cannot qualify it before its reset.
         try:
-            app.refresh(store, candidate)
+            app.refresh(store, candidate, standby=True)
             # Verify identity before treating a profile as spare subscription capacity.
             app.identity(store, candidate)
             candidate = store.profile(candidate["provider"], candidate["name"])
@@ -426,6 +448,13 @@ def standby_profiles(store, current, rule, state):
     candidates.sort(key=lambda p: (p["provider"] != current["provider"],
                                   max(w["used"] for w in store.latest(p)["windows"])))
     return candidates, fallback_error
+
+
+def full_until_reset(store, profile, threshold):
+    """Used quota only falls at a reset, so a standby seen at the threshold stays ineligible."""
+    sample = store.latest(profile)
+    return bool(sample and not sample.get("error") and any(
+        w["used"] >= threshold and w.get("reset") and w["reset"] > time.time() for w in sample["windows"]))
 
 
 def last_known_exhausted(store, profile):
@@ -628,6 +657,9 @@ def supervise(store, profile, extra):
                               app.read_json(state["handoff_path"])["from_profile"])
                 outgoing = store.profile(*source_key.split("/", 1))
                 rule = policy(store, outgoing["provider"])
+                if profile["provider"] == "claude":
+                    # Waiting for the checkpoint can outlast a standby reading; renew it if needed.
+                    app.refresh(store, profile, standby=True)
                 if (fingerprint(profile) != expected_target or not rule["enabled"]
                         or not eligible(store, outgoing, profile, rule["threshold"])):
                     raise app.UserError("Replacement no longer qualifies; no new CLI started. "

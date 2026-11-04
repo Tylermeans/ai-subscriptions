@@ -35,9 +35,14 @@ session databases, in-memory model state, or transcripts between accounts.
 
 4. Collect current quotas. `ai-sub status --refresh` reads Codex limits without
    a model turn. Claude reports its limits after a response through the native
-   status line; this tool cannot refresh an idle Claude profile. Use an actual
-   task in each Claude profile to collect observations. Do not launch two agents
-   to edit the same files just to collect quota; a standby can work elsewhere.
+   status line. When a managed session reaches its threshold, ai-sub reads each
+   idle Claude standby with one minimal headless request (`claude -p` on Haiku
+   with no tools, MCP servers, settings files or saved session) and stores only
+   the normalized windows of its `rate_limit_event`. Identity is verified first;
+   each account is read at most every 3 minutes while the handoff waits, the
+   target is reread before launch if needed, and an account already at the
+   threshold is skipped until its reset. `--refresh`, the dashboard and the
+   background sampler never make this request.
 
 Fresh capacity requires both short-window and weekly data, valid future reset
 times, a snapshot no older than 5 minutes, no provider block, and all reported
