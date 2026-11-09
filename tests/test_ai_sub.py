@@ -21,6 +21,9 @@ class SubscriptionTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.store = app.Store(Path(self.temporary.name) / "private")
+        base_config = patch.object(app, "BASE_CLAUDE_JSON", Path(self.temporary.name) / "base-claude.json")
+        base_config.start()
+        self.addCleanup(base_config.stop)
 
     def profile(self, provider="codex", name="personal", email=None):
         return self.store.add(provider, name, email=email)
@@ -253,6 +256,40 @@ class SubscriptionTests(unittest.TestCase):
         self.assertIn("statusline", command[2])
         self.assertEqual(env["AI_SUB_PREVIOUS_STATUSLINE"], "existing-status")
         self.assertEqual(json.loads((Path(profile["home"]) / "settings.json").read_text())["statusLine"]["command"], "existing-status")
+
+    def test_claude_launch_copies_mcp_servers_from_default_config(self):
+        profile = self.profile("claude")
+        target = Path(profile["home"]) / ".claude.json"
+        server = {"type": "http", "url": "https://example.test/mcp", "headers": {"Authorization": "Bearer new"}}
+        app.write_json(app.BASE_CLAUDE_JSON, {
+            "mcpServers": {"everywhere": {"type": "stdio", "command": "tool"}},
+            "projects": {"/repo": {"mcpServers": {"agents": server}, "allowedTools": ["private"]},
+                         "/empty": {"history": []}}})
+        app.write_json(target, {"hasCompletedOnboarding": True, "projects": {"/repo": {
+            "mcpServers": {"agents": dict(server, headers={"Authorization": "Bearer old"}),
+                           "mine": {"type": "stdio", "command": "own"}}, "history": ["kept"]}}})
+        with patch.object(app, "binary", return_value="/bin/claude"):
+            app.session_command(self.store, profile, [])
+        synced = json.loads(target.read_text())
+        self.assertTrue(synced["hasCompletedOnboarding"])
+        self.assertEqual(synced["mcpServers"], {"everywhere": {"type": "stdio", "command": "tool"}})
+        self.assertEqual(synced["projects"]["/repo"]["mcpServers"]["agents"], server)
+        self.assertEqual(synced["projects"]["/repo"]["mcpServers"]["mine"], {"type": "stdio", "command": "own"})
+        self.assertEqual(synced["projects"]["/repo"]["history"], ["kept"])
+        self.assertNotIn("allowedTools", synced["projects"]["/repo"])
+        self.assertNotIn("/empty", synced["projects"])
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+        self.assertFalse(app.sync_mcp_servers(profile))
+
+    def test_mcp_sync_skips_uninitialised_or_unreadable_profiles(self):
+        profile = self.profile("claude")
+        target = Path(profile["home"]) / ".claude.json"
+        app.write_json(app.BASE_CLAUDE_JSON, {"mcpServers": {"x": {"command": "x"}}})
+        self.assertFalse(app.sync_mcp_servers(profile))
+        self.assertFalse(target.exists())
+        target.write_text("{not json")
+        self.assertFalse(app.sync_mcp_servers(profile))
+        self.assertEqual(target.read_text(), "{not json")
 
     def test_default_launch_arguments_do_not_become_profile_name(self):
         self.profile("claude")

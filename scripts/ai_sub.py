@@ -23,6 +23,9 @@ import time
 from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parent.parent
+# Claude keeps MCP servers in <config dir>/.claude.json, so a profile home never sees servers
+# added with `claude mcp add` under the default config unless ai-sub copies them over.
+BASE_CLAUDE_JSON = Path.home() / ".claude.json"
 PROVIDERS = ("codex", "claude")
 FRESH_SECONDS = 300
 SAMPLE_SECONDS = 240
@@ -631,10 +634,50 @@ def login(store, profile, extra=()):
         pending.unlink(missing_ok=True)
 
 
+def sync_mcp_servers(profile):
+    """Copy user- and project-scoped MCP servers from the default Claude config into the profile.
+
+    The default config is the source of truth: a server it defines replaces the profile's copy of the
+    same name (so a rotated token reaches every profile), and servers only the profile has are kept.
+    A profile Claude has not initialised yet is left alone, as is any file that does not parse.
+    """
+    target = Path(profile["home"]) / ".claude.json"
+    if not target.is_file() or (BASE_CLAUDE_JSON.exists() and target.resolve() == BASE_CLAUDE_JSON.resolve()):
+        return False
+    try:
+        base = read_json(BASE_CLAUDE_JSON, {}) or {}
+        current = read_json(target, {})
+    except (OSError, ValueError):
+        return False
+    if not isinstance(base, dict) or not isinstance(current, dict):
+        return False
+    changed = False
+
+    def merge(source, holder):
+        nonlocal changed
+        if not isinstance(source, dict) or not source:
+            return
+        servers = holder.setdefault("mcpServers", {})
+        for name, config in source.items():
+            if servers.get(name) != config:
+                servers[name] = config
+                changed = True
+
+    merge(base.get("mcpServers"), current)
+    for path, project in (base.get("projects") or {}).items():
+        if isinstance(project, dict) and project.get("mcpServers"):
+            merge(project["mcpServers"], current.setdefault("projects", {}).setdefault(path, {}))
+    if changed:
+        write_json(target, current)
+        target.chmod(0o600)
+    return changed
+
+
 def session_command(store, profile, extra, hooks=None, handoff_settings=None):
     command = [binary(profile["provider"])]
     env = cli_env(store, profile)
     if profile["provider"] == "claude":
+        sync_mcp_servers(profile)
         if any(a == "--settings" or a.startswith("--settings=") for a in extra):
             raise UserError("ai-sub supplies --settings for quota collection; place other settings in the profile home.")
         settings = read_json(Path(profile["home"]) / "settings.json", {})
