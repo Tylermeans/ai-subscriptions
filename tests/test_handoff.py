@@ -23,6 +23,9 @@ class HandoffTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.cwd = Path(self.tmp.name).resolve()
         self.store = app.Store(self.cwd / "private")
+        base_config = patch.object(app, "BASE_CLAUDE_JSON", self.cwd / "base-claude.json")
+        base_config.start()
+        self.addCleanup(base_config.stop)
         self.one = self.profile("one")
         self.two = self.profile("two")
         with contextlib.redirect_stdout(io.StringIO()):
