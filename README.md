@@ -19,6 +19,28 @@ that person's computer; this repository contains the reusable tool.
 · [Codex → Claude](#codex--claude-fallback)
 · [Troubleshooting](#troubleshooting)
 
+## Quick reference
+
+Swap `claude` for `codex` in any of these. `ai-sub --help` lists every command.
+
+| What you want | Command |
+|---|---|
+| See your accounts (`*` marks the selected one) | `ai-sub list` |
+| See usage for every account | `ai-sub status` (add `--refresh` to re-read Codex) |
+| Open the usage chart | `ai-sub dashboard` |
+| Pick the account new sessions use | `ai-sub use claude NAME` |
+| Start a session | `claude` or `codex` (same as `ai-sub run claude` / `ai-sub run codex`) |
+| Start on a specific account once | `ai-sub run claude NAME` |
+| Move a running Claude session to another account | `/account` inside Claude, or `ai-sub switch claude/NAME` from its shell |
+| Turn automatic handoffs on or off | `ai-sub auto on claude` / `ai-sub auto off claude` |
+| See the handoff policy and managed sessions | `ai-sub auto status`, `ai-sub sessions` |
+| Add an account | `ai-sub add claude NAME --email ADDRESS`, then `ai-sub login claude NAME` |
+| Check an account's sign-in | `ai-sub verify claude NAME` |
+| Which account has the most room | `ai-sub recommend claude` |
+| Usage over the last week | `ai-sub history --days 7` |
+| Something looks broken | `ai-sub doctor` |
+| Update ai-sub | `git pull --ff-only`, then `python3 install.py --background --vscode`; restart open sessions |
+
 ## Install
 
 You need macOS, Python 3.10 or newer, and the official Codex and/or Claude Code
@@ -400,7 +422,9 @@ Claude Code mod from `claude-plugin/ai-sub-accounts`:
   `refractors 5h 11% 7d 86% · /account`.
 - `/account` opens a picker of your Claude accounts with each one's email, usage
   and sign-in problems. Use the arrow keys or its number, Enter to choose, Esc to
-  close. `/account NAME` switches directly; `/account cancel` withdraws a pending
+  close. Accounts of the other provider (your Codex account, in a Claude session)
+  are listed below them with their usage, but cannot be chosen: a session moves
+  only between accounts of its own provider. `/account NAME` switches directly; `/account cancel` withdraws a pending
   switch.
 - Choosing an account runs `ai-sub switch claude/NAME`, which you can also run
   from the session's own shell. It verifies that account's sign-in, reads its

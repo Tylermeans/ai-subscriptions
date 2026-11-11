@@ -18,7 +18,7 @@ type DashboardProfile = {
   name: string
   email: string | null
   freshness: string
-  sample: { windows: { label: string; used: number }[]; error: string | null } | null
+  sample: { windows: { label: string; minutes?: number | null; used: number }[]; error: string | null } | null
 }
 
 async function executable($: EngineInterface) {
@@ -35,6 +35,13 @@ function shortError(error: string | null) {
   return error.length > 60 ? `${error.slice(0, 57)}...` : error
 }
 
+// Codex reports windows by slot name (codex/primary); their length says more.
+function windowLabel(label: string, minutes?: number | null) {
+  if (SHORT[label] || !minutes) return label
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`
+  return minutes % 60 === 0 ? `${minutes / 60}h` : label
+}
+
 function usage(account: Account) {
   if (account.freshness !== 'fresh' || !account.windows.length) return 'usage not current'
   return account.windows.map(w => `${SHORT[w.label] ?? w.label} ${Math.round(w.used)}%`).join(' ')
@@ -49,21 +56,23 @@ async function load($: EngineInterface) {
   const runDir = await $.env.get('AI_SUB_RUN_DIR')
   const provider = current?.split('/')[0] ?? 'claude'
   let accounts: Account[] = []
+  let others: Account[] = []
   let error: string | null = null
   try {
     const result = await $.process.run([await executable($), 'dashboard', '--json'], { timeoutMs: 15000 })
     if (result.exitCode === 0) {
       const data = JSON.parse(result.stdout) as { profiles: DashboardProfile[] }
-      accounts = data.profiles
-        .filter(p => p.provider === provider)
-        .map(p => ({
-          key: p.profile,
-          name: p.name,
-          email: p.email,
-          freshness: p.freshness,
-          windows: (p.sample?.windows ?? []).map(w => ({ label: w.label, used: w.used })),
-          error: p.sample?.error ?? null,
-        }))
+      const account = (p: DashboardProfile): Account => ({
+        key: p.profile,
+        name: p.name,
+        email: p.email,
+        freshness: p.freshness,
+        windows: (p.sample?.windows ?? []).map(w => ({ label: windowLabel(w.label, w.minutes), used: w.used })),
+        error: p.sample?.error ?? null,
+      })
+      accounts = data.profiles.filter(p => p.provider === provider).map(account)
+      // Other providers' accounts are shown, but a session can only move within its own provider.
+      others = data.profiles.filter(p => p.provider !== provider).map(account)
     } else {
       error = firstLine(result.stderr) || 'ai-sub dashboard failed.'
     }
@@ -79,7 +88,7 @@ async function load($: EngineInterface) {
       run = null
     }
   }
-  const latest: Snapshot = { current, managed: Boolean(runDir), accounts, run, error }
+  const latest: Snapshot = { current, managed: Boolean(runDir), accounts, others, run, error }
   await update($, snapshot, () => latest)
   return latest
 }
@@ -154,7 +163,7 @@ export const register: Register = on => {
         title: 'Accounts',
         focus: true,
         closeOnEscape: true,
-        rows: snap.accounts.length + 3,
+        rows: snap.accounts.length + snap.others.length + 3,
       })
 
       return {}
@@ -218,6 +227,18 @@ export const register: Register = on => {
             >
               {account.name} <Text dimColor>{notes.join(' · ')}</Text>
             </Button>
+          )
+        })}
+        {snap.others.map(account => {
+          const notes = [account.email ?? 'no email', usage(account)]
+          const problem = shortError(account.error)
+          if (problem) notes.push(problem)
+          notes.push('not switchable from this session')
+
+          return (
+            <Text key={account.key} dimColor>
+              {account.key} {notes.join(' · ')}
+            </Text>
           )
         })}
         {snap.error && <Text color="error">{snap.error}</Text>}

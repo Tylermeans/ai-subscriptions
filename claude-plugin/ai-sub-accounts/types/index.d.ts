@@ -15,6 +15,7 @@ export type Snapshot = {
   current: string | null
   managed: boolean
   accounts: Account[]
+  others: Account[]
   run: RunInfo | null
   error: string | null
 }

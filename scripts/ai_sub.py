@@ -701,11 +701,30 @@ def chosen_profiles(store, provider=None, name=None):
     return [p for p in store.config()["profiles"].values() if not provider or p["provider"] == provider]
 
 
+COMMAND_HELP = {
+    "add": "Register another subscription account",
+    "configure": "Change a saved account's email, inbox or Chrome profile",
+    "list": "List saved accounts; * marks the one new sessions use",
+    "use": "Choose the account new sessions use",
+    "login": "Sign in to an account with the official CLI login",
+    "verify": "Check an account's sign-in and expected email",
+    "inbox": "Open the account's saved inbox in Chrome",
+    "usage-page": "Open the provider's usage page in the account's Chrome profile",
+    "reauth-info": "Print an account's email, inbox, Chrome profile and pending login",
+    "run": "Start claude or codex on the selected (or a named) account",
+    "status": "Show each account's latest usage and how fresh it is",
+    "recommend": "Rank accounts by remaining quota; changes nothing",
+    "watch": "Keep sampling usage in this terminal",
+    "history": "Show recorded usage for recent days",
+    "doctor": "Check that the CLIs and Chrome are installed and where state lives",
+}
+
+
 def parser():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
     for action in ("add", "configure"):
-        s = sub.add_parser(action)
+        s = sub.add_parser(action, help=COMMAND_HELP[action])
         s.add_argument("provider", choices=PROVIDERS)
         s.add_argument("name")
         s.add_argument("--email")
@@ -713,16 +732,16 @@ def parser():
         s.add_argument("--chrome-profile")
         if action == "add":
             s.add_argument("--current", action="store_true", help="Register current login without copying credentials")
-    sub.add_parser("list")
+    sub.add_parser("list", help=COMMAND_HELP["list"])
     for action in ("use", "login", "verify", "inbox", "usage-page", "reauth-info"):
-        s = sub.add_parser(action)
+        s = sub.add_parser(action, help=COMMAND_HELP[action])
         s.add_argument("provider", choices=PROVIDERS)
         s.add_argument("name", nargs="?")
     s = sub.add_parser("extension", help="Track which account each Chrome extension is signed into")
     s.add_argument("mode", choices=("status", "open", "done"))
     s.add_argument("provider", choices=PROVIDERS, nargs="?")
     s.add_argument("name", nargs="?")
-    s = sub.add_parser("run")
+    s = sub.add_parser("run", help=COMMAND_HELP["run"])
     s.add_argument("provider", choices=PROVIDERS)
     s.add_argument("args", nargs=argparse.REMAINDER)
     s = sub.add_parser("native", help="Internal dispatcher for optional native.zsh shell integration")
@@ -746,7 +765,7 @@ def parser():
     s.add_argument("--no-open", action="store_true", help="Print the chart path without opening a browser")
     s.add_argument("--refresh", action="store_true", help="Fetch Codex usage once before opening the chart")
     for action in ("status", "recommend", "watch", "history"):
-        s = sub.add_parser(action)
+        s = sub.add_parser(action, help=COMMAND_HELP[action])
         s.add_argument("provider", choices=PROVIDERS, nargs="?")
         s.add_argument("name", nargs="?")
         if action in ("status", "recommend"):
@@ -760,7 +779,7 @@ def parser():
             s.add_argument("--days", type=int, default=7)
     s = sub.add_parser("statusline", help="Internal Claude quota collector (JSON on stdin)")
     s.add_argument("name")
-    sub.add_parser("doctor")
+    sub.add_parser("doctor", help=COMMAND_HELP["doctor"])
     return p
 
 

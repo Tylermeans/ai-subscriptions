@@ -9,7 +9,7 @@ const DASHBOARD = {
     { profile: 'claude/midwest', provider: 'claude', name: 'midwest', email: 'm@example.com',
       freshness: 'unknown', sample: { windows: [], error: 'The signed-in email does not match this profile.' } },
     { profile: 'codex/current', provider: 'codex', name: 'current', email: 'c@example.com',
-      freshness: 'fresh', sample: { windows: [], error: null } },
+      freshness: 'fresh', sample: { windows: [{ label: 'codex/primary', minutes: 10080, used: 43 }], error: null } },
   ],
 }
 
@@ -80,6 +80,8 @@ test('picking an account in the picker asks ai-sub and starts the checkpoint tur
                scroll: { offset: 0, bodyRows: 10 }, view: {} },
     })
     expect(await ui.findAll({ type: 'Button' })).toHaveLength(2)
+    expect((await ui.find({ type: 'Text', text: /codex\/current/ }))?.text)
+      .toBe('codex/current c@example.com · 7d 43% · not switchable from this session')
     expect((await ui.find({ key: 'claude/midwest' }))?.text).toContain('signed in to a different account')
     await ui.press({ key: 'claude/midwest' })
     await ui.unmount()
